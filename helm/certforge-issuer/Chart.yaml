@@ -1,0 +1,17 @@
+apiVersion: v2
+name: certforge-issuer
+description: cert-manager external issuer for CertForge certificate governance
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - cert-manager
+  - certificates
+  - pki
+  - governance
+home: https://certgovernance.app
+sources:
+  - https://github.com/certforge/certforge-issuer
+maintainers:
+  - name: CertForge
+    email: support@certforge.xyz

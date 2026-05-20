@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: certforge-issuer
+  namespace: certforge-system
+  labels:
+    app: certforge-issuer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: certforge-issuer
+  template:
+    metadata:
+      labels:
+        app: certforge-issuer
+    spec:
+      serviceAccountName: certforge-issuer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: controller
+          image: ghcr.io/certforge/certforge-issuer:latest
+          args:
+            - --leader-elect=true
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      terminationGracePeriodSeconds: 10

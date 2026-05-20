@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/certforge/certforge-issuer
+  pullPolicy: IfNotPresent
+  tag: ""  # defaults to chart appVersion
+
+# CertForge server URL and API token.
+# The token is stored in a Secret; set tokenSecret.create=true to create it
+# from the token value, or create the Secret manually and set tokenSecret.name.
+certforge:
+  url: "https://app.certgovernance.app"
+  token: ""        # set this or use an existing secret
+
+tokenSecret:
+  create: true     # create the Secret from certforge.token
+  name: certforge-credentials
+
+leaderElect: true
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 64Mi
+  requests:
+    cpu: 10m
+    memory: 32Mi
