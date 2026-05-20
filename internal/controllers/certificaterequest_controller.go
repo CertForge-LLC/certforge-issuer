@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
@@ -17,7 +18,10 @@ import (
 	certforgev1alpha1 "github.com/certforge/certforge-issuer/api/v1alpha1"
 )
 
-const annotationRequestID = "certforge.io/request-id"
+const (
+	annotationRequestID   = "certforge.io/request-id"
+	annotationSubmittedAt = "certforge.io/submitted-at"
+)
 
 // CertificateRequestReconciler watches CertificateRequest objects and
 // delegates issuance to CertForge when the issuerRef group is certforge.io.
@@ -79,12 +83,13 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 			return ctrl.Result{RequeueAfter: requeueDelay}, nil
 		}
 
-		// Store the request ID so we can poll on requeue.
+		// Store the request ID and submission time so we can poll and show elapsed time.
 		patch := client.MergeFrom(cr.DeepCopy())
 		if cr.Annotations == nil {
 			cr.Annotations = map[string]string{}
 		}
 		cr.Annotations[annotationRequestID] = id
+		cr.Annotations[annotationSubmittedAt] = time.Now().UTC().Format(time.RFC3339)
 		if err := r.Patch(ctx, cr, patch); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -119,6 +124,15 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 
 	default: // pending
+		msg := fmt.Sprintf("Waiting for CertForge approval — review at https://app.certgovernance.app/approvals")
+		if ts := cr.Annotations[annotationSubmittedAt]; ts != "" {
+			if submitted, err := time.Parse(time.RFC3339, ts); err == nil {
+				msg = fmt.Sprintf("Waiting for CertForge approval (submitted %s ago) — review at https://app.certgovernance.app/approvals",
+					formatElapsed(time.Since(submitted)))
+			}
+		}
+		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionReady,
+			cmmeta.ConditionFalse, "Pending", msg)
 		logger.Info("request pending approval", "requestID", requestID)
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
