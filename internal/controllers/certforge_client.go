@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// PolicyError is returned when CertForge rejects a CSR due to policy (HTTP 422).
+// It is a terminal error — retrying will not help until the policy is updated.
+type PolicyError struct{ Message string }
+
+func (e *PolicyError) Error() string { return e.Message }
+
 // certforgeClient talks to the CertForge REST API.
 type certforgeClient struct {
 	baseURL string
@@ -63,7 +69,7 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name st
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("policy violation: %s", string(b))
+		return "", &PolicyError{Message: string(b)}
 	}
 	if resp.StatusCode != http.StatusAccepted {
 		b, _ := io.ReadAll(resp.Body)

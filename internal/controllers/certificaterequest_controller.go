@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -63,6 +64,15 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// First time — submit the CSR.
 		id, err := cf.Submit(ctx, string(cr.Spec.Request), cr.Namespace, cr.Name)
 		if err != nil {
+			var policyErr *PolicyError
+			if errors.As(err, &policyErr) {
+				// Terminal: no matching policy. Signal InvalidRequest so cert-manager
+				// surfaces the error without retrying.
+				logger.Info("CSR rejected by CertForge policy", "reason", policyErr.Message)
+				r.setCondition(ctx, cr, cmapi.CertificateRequestConditionInvalidRequest,
+					cmmeta.ConditionTrue, "PolicyViolation", policyErr.Message)
+				return ctrl.Result{}, nil
+			}
 			logger.Error(err, "failed to submit CSR to CertForge")
 			r.setCondition(ctx, cr, cmapi.CertificateRequestConditionReady,
 				cmmeta.ConditionFalse, "Pending", fmt.Sprintf("Submitting to CertForge: %v", err))
