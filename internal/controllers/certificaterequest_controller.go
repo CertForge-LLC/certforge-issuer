@@ -47,8 +47,9 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	// Already denied — nothing to do.
-	if isConditionTrue(cr, cmapi.CertificateRequestConditionDenied) {
+	// Already terminal — nothing to do.
+	if isConditionTrue(cr, cmapi.CertificateRequestConditionDenied) ||
+		isConditionTrue(cr, cmapi.CertificateRequestConditionInvalidRequest) {
 		return ctrl.Result{}, nil
 	}
 
