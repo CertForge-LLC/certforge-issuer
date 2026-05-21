@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: k8manual-test-1
+  namespace: default
+spec:
+  secretName: k8manual-test-1-tls
+  dnsNames:
+    - k8manual.certforge.xyz
+  issuerRef:
+    name: certforge
+    kind: CertForgeClusterIssuer
+    group: certforge.io
