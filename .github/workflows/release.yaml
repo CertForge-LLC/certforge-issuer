@@ -7,13 +7,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: certforge/certforge-issuer
+  IMAGE_NAME: certforge-llc/certforge-issuer
 
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -44,10 +44,19 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
       - name: Package Helm chart
         run: |
           helm package helm/certforge-issuer --destination /tmp/charts
 
       - name: Push Helm chart to OCI registry
         run: |
-          helm push /tmp/charts/certforge-issuer-*.tgz oci://${{ env.REGISTRY }}/certforge/charts
+          helm push /tmp/charts/certforge-issuer-*.tgz oci://${{ env.REGISTRY }}/certforge-llc/charts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/charts/certforge-issuer-*.tgz
+          generate_release_notes: true

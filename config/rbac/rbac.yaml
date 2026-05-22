@@ -17,7 +17,7 @@ rules:
   # Watch and update CertificateRequests (cert-manager)
   - apiGroups: ["cert-manager.io"]
     resources: ["certificaterequests"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: ["cert-manager.io"]
     resources: ["certificaterequests/status"]
     verbs: ["update", "patch"]

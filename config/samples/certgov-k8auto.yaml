@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: certgov-k8auto
+  namespace: default
+spec:
+  secretName: certgov-k8auto-tls
+  dnsNames:
+    - k8auto.certgovernance.app
+  issuerRef:
+    name: certforge
+    kind: CertForgeClusterIssuer
+    group: certforge.io

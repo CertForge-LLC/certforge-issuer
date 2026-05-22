@@ -1,4 +1,4 @@
-certforge-issuer
+/certforge-issuer
 *.test
 *.out
 dist/

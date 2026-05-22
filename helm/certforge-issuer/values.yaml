@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/certforge/certforge-issuer
+  repository: ghcr.io/certforge-llc/certforge-issuer
   pullPolicy: IfNotPresent
   tag: ""  # defaults to chart appVersion
 

@@ -65,14 +65,26 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Check if we already submitted this request (stored in annotation).
 	requestID := cr.Annotations[annotationRequestID]
 
+	// "rejected" is a sentinel written on PolicyError to prevent re-submission races.
+	if requestID == "rejected" {
+		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionInvalidRequest,
+			cmmeta.ConditionTrue, "PolicyViolation", "Request rejected by CertForge policy")
+		return ctrl.Result{}, nil
+	}
+
 	if requestID == "" {
 		// First time — submit the CSR.
 		id, err := cf.Submit(ctx, string(cr.Spec.Request), cr.Namespace, cr.Name)
 		if err != nil {
 			var policyErr *PolicyError
 			if errors.As(err, &policyErr) {
-				// Terminal: no matching policy. Signal InvalidRequest so cert-manager
-				// surfaces the error without retrying.
+				// Write the sentinel annotation first so concurrent reconciles don't re-submit.
+				patch := client.MergeFrom(cr.DeepCopy())
+				if cr.Annotations == nil {
+					cr.Annotations = map[string]string{}
+				}
+				cr.Annotations[annotationRequestID] = "rejected"
+				_ = r.Patch(ctx, cr, patch)
 				logger.Info("CSR rejected by CertForge policy", "reason", policyErr.Message)
 				r.setCondition(ctx, cr, cmapi.CertificateRequestConditionInvalidRequest,
 					cmmeta.ConditionTrue, "PolicyViolation", policyErr.Message)
@@ -125,11 +137,13 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 
 	default: // pending
-		msg := fmt.Sprintf("Waiting for CertForge approval — review at https://app.certgovernance.app/approvals")
+		msg := "Waiting for CertForge to issue certificate"
+		if result.Reason != "" {
+			msg = result.Reason
+		}
 		if ts := cr.Annotations[annotationSubmittedAt]; ts != "" {
 			if submitted, err := time.Parse(time.RFC3339, ts); err == nil {
-				msg = fmt.Sprintf("Waiting for CertForge approval (submitted %s ago) — review at https://app.certgovernance.app/approvals",
-					formatElapsed(time.Since(submitted)))
+				msg = fmt.Sprintf("%s (submitted %s ago)", msg, formatElapsed(time.Since(submitted)))
 			}
 		}
 		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionReady,

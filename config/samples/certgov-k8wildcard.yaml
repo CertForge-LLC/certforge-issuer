@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: certgov-k8wildcard
+  namespace: default
+spec:
+  secretName: certgov-k8wildcard-tls
+  dnsNames:
+    - "*.k8wildcard.certgovernance.app"
+  issuerRef:
+    name: certforge
+    kind: CertForgeClusterIssuer
+    group: certforge.io
