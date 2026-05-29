@@ -1,0 +1,50 @@
+version: 0.1.0
+name: certforge-issuer
+displayName: CertForge Issuer
+createdAt: "2026-05-20T10:02:44Z"
+description: |
+  cert-manager external issuer that adds policy enforcement, approval workflows,
+  and a full audit trail to every certificate request in your Kubernetes cluster.
+
+  cert-manager automates certificate renewal — but it doesn't control who can
+  request what. certforge-issuer bridges cert-manager to CertForge's policy engine
+  so every certificate request is evaluated against your Domain Trust Profiles before
+  reaching a CA. Requests for domains not covered by a policy are denied. Every
+  approval, denial, and renewal is logged with actor, timestamp, and outcome.
+
+  Free tier at certgovernance.app includes 100 certificates, 25 domains, full
+  approval workflows, and audit log export. No credit card required.
+logoURL: https://certgovernance.app/assets/logo.png
+homeURL: https://certgovernance.app
+appVersion: 0.1.0
+containsSecurityUpdates: false
+prerelease: true
+keywords:
+  - cert-manager
+  - certificates
+  - kubernetes
+  - pki
+  - compliance
+  - governance
+  - policy
+  - audit
+  - security
+  - issuer
+links:
+  - name: CertForge
+    url: https://certgovernance.app
+  - name: Documentation
+    url: https://github.com/CertForge-LLC/certforge-issuer#readme
+  - name: Source
+    url: https://github.com/CertForge-LLC/certforge-issuer
+maintainers:
+  - name: CertForge
+    email: hello@certgovernance.app
+provider:
+  name: CertForge LLC
+recommendations:
+  - url: https://artifacthub.io/packages/helm/cert-manager/cert-manager
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Basic Install
