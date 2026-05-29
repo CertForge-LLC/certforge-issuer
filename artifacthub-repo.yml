@@ -1,4 +1,4 @@
-repositoryID: ""  # Leave blank — Artifact Hub generates this on first registration
+repositoryID: "ce61d650-15a2-4906-939e-dfd9edb52073"
 owners:
   - name: CertForge
     email: hello@certgovernance.app
