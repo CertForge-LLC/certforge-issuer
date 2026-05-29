@@ -1,4 +1,4 @@
-version: 0.1.0
+version: 0.1.1
 name: certforge-issuer
 displayName: CertForge Issuer
 createdAt: "2026-05-20T10:02:44Z"
@@ -16,7 +16,7 @@ description: |
   approval workflows, and audit log export. No credit card required.
 logoURL: https://certgovernance.app/assets/logo.png
 homeURL: https://certgovernance.app
-appVersion: 0.1.0
+appVersion: 0.1.1
 containsSecurityUpdates: false
 prerelease: true
 keywords:
