@@ -33,12 +33,35 @@ anything. There is nothing to stop it.
 Your cert-manager setup stays exactly as-is. Add certforge-issuer as the external issuer and
 governance is in place without changing a single workload manifest.
 
+## Prerequisites
+
+- Kubernetes 1.24+
+- cert-manager v1.14+
+- A CertForge account — [free tier](https://certgovernance.app) includes 100 certificates,
+  25 domains, full approval workflows, and audit log export. No credit card required.
+
+### CertForge setup (required before installation)
+
+The issuer will reject certificate requests if CertForge is not configured for your domains.
+Complete these steps first — they take about five minutes.
+
+1. **Create an account** at [certgovernance.app](https://certgovernance.app) and set up your organization.
+
+2. **Add your domains** — in CertForge, create a Domain Trust Profile (DTP) that covers the
+   domains your Kubernetes workloads will request certificates for. The DTP defines which CA to
+   use, whether wildcards are permitted, and whether requests require manual approval.
+
+   Example: if your workloads will request certs for `*.internal.example.com`, your DTP must
+   include that pattern (or `*.example.com`). Requests for domains not covered by any DTP are
+   rejected with an `InvalidRequest` condition on the `CertificateRequest`.
+
+3. **Generate an API token** — go to Settings → API Keys and create a token scoped to your
+   organization. You'll supply this token during Helm installation in the next step.
+
 ## Quick Start
 
-**1. Create a free account** at [certgovernance.app](https://certgovernance.app), add your domains,
-and generate an API token under Settings → API Keys.
-
-**2. Install the issuer:**
+**Install the issuer** (the Helm chart creates a `certforge-credentials` Secret in
+`certforge-system` automatically from the token you provide):
 
 ```bash
 helm install certforge-issuer oci://ghcr.io/certforge/charts/certforge-issuer \
@@ -48,7 +71,8 @@ helm install certforge-issuer oci://ghcr.io/certforge/charts/certforge-issuer \
   --set certforge.token=<your-api-token>
 ```
 
-**3. Create an issuer resource:**
+**Create an issuer resource** in each namespace that needs certificates (or use
+`CertForgeClusterIssuer` for cluster-wide access — see [Usage](#usage)):
 
 ```yaml
 apiVersion: certforge.io/v1alpha1
@@ -62,7 +86,10 @@ spec:
     name: certforge-credentials
 ```
 
-**4. Reference it from your Certificate:**
+> The `certforge-credentials` Secret was created by the Helm chart above.
+> For `CertForgeClusterIssuer`, the Secret must be in the `certforge-system` namespace.
+
+**Reference it from your Certificate:**
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -83,31 +110,6 @@ spec:
 cert-manager creates a `CertificateRequest`, the controller submits it to CertForge for policy
 evaluation, and the signed certificate is returned once approved and issued.
 
-## Prerequisites
-
-- Kubernetes 1.24+
-- cert-manager v1.14+
-- A CertForge account — [free tier](https://certgovernance.app) includes 100 certificates,
-  full approval workflows, and audit log export
-
-### CertForge setup required before installation
-
-The issuer will reject certificate requests if CertForge is not configured for your domains.
-Complete these steps first:
-
-1. **Create an account** at [certgovernance.app](https://certgovernance.app) and set up your organization.
-
-2. **Add your domains** — in CertForge, create a Domain Trust Profile (DTP) that covers the
-   domains your Kubernetes workloads will request certificates for. The DTP defines which CA to
-   use, whether wildcards are permitted, and whether requests require manual approval.
-
-   Example: if your workloads will request certs for `*.internal.example.com`, your DTP must
-   include that pattern (or `*.example.com`). Requests for domains not covered by any DTP are
-   rejected with an `InvalidRequest` condition on the `CertificateRequest`.
-
-3. **Generate an API token** — in CertForge, go to Settings → API Keys and create a token
-   scoped to your organization. This token is what you supply during Helm installation.
-
 ## Usage
 
 ### Cluster-scoped Issuer
@@ -125,7 +127,7 @@ spec:
     name: certforge-credentials
 ```
 
-The secret must exist in the `certforge-system` namespace for `CertForgeClusterIssuer`.
+The Secret must exist in the `certforge-system` namespace.
 
 ### Manual Installation (without Helm)
 
@@ -176,8 +178,8 @@ docker build -t certforge-issuer:dev .
 
 ## Get Started Free
 
-[certgovernance.app](https://certgovernance.app) — 100 certificates, full approval workflows,
-audit log and export. No credit card required.
+[certgovernance.app](https://certgovernance.app) — 100 certificates, 25 domains, full approval
+workflows, audit log and export. No credit card required.
 
 ## License
 
