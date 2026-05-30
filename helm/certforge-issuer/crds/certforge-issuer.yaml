@@ -1,0 +1,116 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: certforgeissuers.certforge.io
+spec:
+  group: certforge.io
+  names:
+    kind: CertForgeIssuer
+    listKind: CertForgeIssuerList
+    plural: certforgeissuers
+    singular: certforgeissuer
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Ready')].status
+        - name: URL
+          type: string
+          jsonPath: .spec.url
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [url, authSecretRef]
+              properties:
+                url:
+                  type: string
+                  description: Base URL of the CertForge server
+                authSecretRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: {type: string}
+                      status: {type: string}
+                      reason: {type: string}
+                      message: {type: string}
+                      lastTransitionTime: {type: string, format: date-time}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: certforgeclusterissuers.certforge.io
+spec:
+  group: certforge.io
+  names:
+    kind: CertForgeClusterIssuer
+    listKind: CertForgeClusterIssuerList
+    plural: certforgeclusterissuers
+    singular: certforgeclusterissuer
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Ready')].status
+        - name: URL
+          type: string
+          jsonPath: .spec.url
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [url, authSecretRef]
+              properties:
+                url:
+                  type: string
+                authSecretRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: {type: string}
+                      status: {type: string}
+                      reason: {type: string}
+                      message: {type: string}
+                      lastTransitionTime: {type: string, format: date-time}
