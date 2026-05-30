@@ -21,7 +21,7 @@ spec:
         runAsUser: 65532
       containers:
         - name: controller
-          image: ghcr.io/certforge/certforge-issuer:latest
+          image: ghcr.io/certforge-llc/certforge-issuer:latest
           args:
             - --leader-elect=true
           ports:

@@ -64,7 +64,7 @@ Complete these steps first — they take about five minutes.
 `certforge-system` automatically from the token you provide):
 
 ```bash
-helm install certforge-issuer oci://ghcr.io/certforge/charts/certforge-issuer \
+helm install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
   --namespace certforge-system \
   --create-namespace \
   --set certforge.url=https://app.certgovernance.app \
