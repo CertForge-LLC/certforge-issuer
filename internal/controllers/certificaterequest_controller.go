@@ -53,6 +53,13 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
+	// cert-manager v1.3+ requires issuers to wait for the Approved condition before signing.
+	// Without this check the issuer acts before human/policy approvers have had a chance to deny the request.
+	if !isConditionTrue(cr, cmapi.CertificateRequestConditionApproved) {
+		logger.Info("CertificateRequest not yet approved — waiting", "name", req.Name)
+		return ctrl.Result{}, nil
+	}
+
 	// Resolve the issuer and load credentials.
 	cfURL, token, err := r.resolveIssuer(ctx, cr)
 	if err != nil {
