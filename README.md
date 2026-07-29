@@ -111,6 +111,19 @@ spec:
 cert-manager creates a `CertificateRequest`, the controller submits it to CertForge for policy
 evaluation, and the signed certificate is returned once approved and issued.
 
+### Verify before deploying to a cluster
+
+CertForge includes a built-in integration test that simulates the full cert-manager flow — policy
+evaluation, approval, and CA issuance — without needing a live Kubernetes cluster.
+
+Go to **Integrations → cert-manager** in the CertForge UI and click **Deploy & Watch**. It
+generates a real CSR, submits it through your Trust Profile and approval configuration, and shows
+the result in real time. The issued certificate appears in Certificate Requests exactly as it would
+from a live cluster.
+
+Use this to confirm your Trust Profile covers the domains you intend to use and that your CA
+configuration is working before installing certforge-issuer.
+
 ## Usage
 
 ### Cluster-scoped Issuer
