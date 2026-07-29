@@ -36,13 +36,19 @@ spec:
               properties:
                 url:
                   type: string
-                  description: Base URL of the CertForge server
+                  description: "Base URL of the CertForge server. Use https://app.certgovernance.app for US East or https://eu.certgovernance.app for EU West."
                 authSecretRef:
                   type: object
                   required: [name]
                   properties:
                     name:
                       type: string
+                issuanceProfileID:
+                  type: string
+                  description: "Optional default issuance profile ID. Overrides the DTP default. Can be overridden per Certificate via the certforge.io/issuance-profile annotation."
+                secretNamespace:
+                  type: string
+                  description: "Namespace to read the authSecretRef Secret from (CertForgeClusterIssuer only). Defaults to certforge-system."
             status:
               type: object
               properties:
@@ -95,12 +101,19 @@ spec:
               properties:
                 url:
                   type: string
+                  description: "Base URL of the CertForge server. Use https://app.certgovernance.app for US East or https://eu.certgovernance.app for EU West."
                 authSecretRef:
                   type: object
                   required: [name]
                   properties:
                     name:
                       type: string
+                issuanceProfileID:
+                  type: string
+                  description: "Optional default issuance profile ID. Overrides the DTP default. Can be overridden per Certificate via the certforge.io/issuance-profile annotation."
+                secretNamespace:
+                  type: string
+                  description: "Namespace to read the authSecretRef Secret from. Defaults to certforge-system."
             status:
               type: object
               properties:

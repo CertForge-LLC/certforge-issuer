@@ -32,10 +32,11 @@ func newClient(baseURL, token string) *certforgeClient {
 }
 
 type submitRequest struct {
-	CSR       string `json:"csr"`
-	Source    string `json:"source"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name,omitempty"`
+	CSR               string `json:"csr"`
+	Source            string `json:"source"`
+	Namespace         string `json:"namespace,omitempty"`
+	Name              string `json:"name,omitempty"`
+	IssuanceProfileID string `json:"issuance_profile_id,omitempty"`
 }
 
 type certResponse struct {
@@ -46,12 +47,14 @@ type certResponse struct {
 }
 
 // Submit posts a CSR to CertForge and returns the request ID.
-func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name string) (string, error) {
+// issuanceProfileID is optional; pass "" to use the DTP default.
+func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, issuanceProfileID string) (string, error) {
 	body, _ := json.Marshal(submitRequest{
-		CSR:       csrPEM,
-		Source:    "cert-manager",
-		Namespace: namespace,
-		Name:      name,
+		CSR:               csrPEM,
+		Source:            "cert-manager",
+		Namespace:         namespace,
+		Name:              name,
+		IssuanceProfileID: issuanceProfileID,
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		c.baseURL+"/api/v1/certificate-requests", bytes.NewReader(body))

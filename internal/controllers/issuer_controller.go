@@ -31,9 +31,13 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Resolve credentials from the referenced Secret.
+	// For ClusterIssuer: use SecretNamespace from spec if set, else default to "certforge-system".
 	secretNS := req.Namespace
 	if r.Kind == "CertForgeClusterIssuer" {
-		secretNS = "certforge-system" // ClusterIssuers reference secrets in a fixed namespace
+		secretNS = "certforge-system"
+		if spec.SecretNamespace != "" {
+			secretNS = spec.SecretNamespace
+		}
 	}
 
 	secret := &corev1.Secret{}

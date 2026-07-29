@@ -8,9 +8,16 @@ image:
 # CertForge server URL and API token.
 # The token is stored in a Secret; set tokenSecret.create=true to create it
 # from the token value, or create the Secret manually and set tokenSecret.name.
+#
+# Data residency: the URL and API token together determine which org and region
+# certificate requests are routed to. Use the appropriate URL for your region:
+#   US East: https://app.certgovernance.app   (default)
+#   EU West:  https://eu.certgovernance.app   (GDPR-aligned)
 certforge:
   url: "https://app.certgovernance.app"
-  token: ""        # set this or use an existing secret
+  token: ""              # set this or use an existing secret
+  issuanceProfileID: ""  # optional: default issuance profile ID for all certs from this issuer
+  secretNamespace: ""    # optional: override namespace for the credentials Secret (ClusterIssuer only, default: certforge-system)
 
 tokenSecret:
   create: true     # create the Secret from certforge.token

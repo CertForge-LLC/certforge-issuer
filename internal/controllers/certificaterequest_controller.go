@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	annotationRequestID   = "certforge.io/request-id"
-	annotationSubmittedAt = "certforge.io/submitted-at"
+	annotationRequestID      = "certforge.io/request-id"
+	annotationSubmittedAt    = "certforge.io/submitted-at"
+	annotationIssuanceProfile = "certforge.io/issuance-profile"
 )
 
 // CertificateRequestReconciler watches CertificateRequest objects and
@@ -61,10 +62,16 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// Resolve the issuer and load credentials.
-	cfURL, token, err := r.resolveIssuer(ctx, cr)
+	cfURL, token, issuerProfileID, err := r.resolveIssuer(ctx, cr)
 	if err != nil {
 		logger.Error(err, "failed to resolve issuer")
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
+	}
+
+	// Per-Certificate annotation overrides the issuer-level default.
+	issuanceProfileID := cr.Annotations[annotationIssuanceProfile]
+	if issuanceProfileID == "" {
+		issuanceProfileID = issuerProfileID
 	}
 
 	cf := newClient(cfURL, token)
@@ -81,7 +88,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	if requestID == "" {
 		// First time — submit the CSR.
-		id, err := cf.Submit(ctx, string(cr.Spec.Request), cr.Namespace, cr.Name)
+		id, err := cf.Submit(ctx, string(cr.Spec.Request), cr.Namespace, cr.Name, issuanceProfileID)
 		if err != nil {
 			var policyErr *PolicyError
 			if errors.As(err, &policyErr) {
@@ -160,41 +167,47 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 }
 
-// resolveIssuer finds the Issuer or ClusterIssuer and returns the CertForge URL and token.
-func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cmapi.CertificateRequest) (string, string, error) {
+// resolveIssuer finds the Issuer or ClusterIssuer and returns the CertForge URL, token,
+// default issuance profile ID, and any error.
+func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cmapi.CertificateRequest) (string, string, string, error) {
 	var spec certforgev1alpha1.CertForgeIssuerSpec
 
 	switch cr.Spec.IssuerRef.Kind {
 	case "CertForgeClusterIssuer", "":
 		obj := &certforgev1alpha1.CertForgeClusterIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name}, obj); err != nil {
-			return "", "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+			return "", "", "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
 		spec = obj.Spec
 	case "CertForgeIssuer":
 		obj := &certforgev1alpha1.CertForgeIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name, Namespace: cr.Namespace}, obj); err != nil {
-			return "", "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+			return "", "", "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
 		spec = obj.Spec
 	default:
-		return "", "", fmt.Errorf("unknown issuer kind %q", cr.Spec.IssuerRef.Kind)
+		return "", "", "", fmt.Errorf("unknown issuer kind %q", cr.Spec.IssuerRef.Kind)
 	}
 
-	// Resolve the token from the Secret.
+	// Resolve the namespace for the credentials Secret.
+	// For ClusterIssuer: use SecretNamespace if set, else default to "certforge-system".
+	// For namespace-scoped Issuer: use the issuer's own namespace.
 	secretNS := cr.Namespace
 	if cr.Spec.IssuerRef.Kind == "CertForgeClusterIssuer" || cr.Spec.IssuerRef.Kind == "" {
 		secretNS = "certforge-system"
+		if spec.SecretNamespace != "" {
+			secretNS = spec.SecretNamespace
+		}
 	}
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
-		return "", "", fmt.Errorf("credentials secret %q not found: %w", spec.AuthSecretRef.Name, err)
+		return "", "", "", fmt.Errorf("credentials secret %q not found: %w", spec.AuthSecretRef.Name, err)
 	}
 	token := string(secret.Data["token"])
 	if token == "" {
-		return "", "", fmt.Errorf("secret %q has no 'token' key", spec.AuthSecretRef.Name)
+		return "", "", "", fmt.Errorf("secret %q has no 'token' key", spec.AuthSecretRef.Name)
 	}
-	return spec.URL, token, nil
+	return spec.URL, token, spec.IssuanceProfileID, nil
 }
 
 func (r *CertificateRequestReconciler) setCondition(

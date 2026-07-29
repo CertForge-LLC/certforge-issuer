@@ -1,0 +1,18 @@
+# EU West ClusterIssuer example.
+# Use this when your CertForge org is pinned to the EU West region (GDPR-aligned).
+# The url field + API token determine data residency — EU org data never touches US infrastructure.
+apiVersion: certforge.io/v1alpha1
+kind: CertForgeClusterIssuer
+metadata:
+  name: certforge-eu
+spec:
+  url: https://eu.certgovernance.app
+  authSecretRef:
+    name: certforge-eu-credentials
+  # issuanceProfileID: "your-profile-id"   # optional: pin to a specific CA profile
+  # secretNamespace: certforge-system        # default; override if your secret is elsewhere
+---
+# Store your EU org API token here before applying the ClusterIssuer above.
+# kubectl create secret generic certforge-eu-credentials \
+#   --namespace certforge-system \
+#   --from-literal=token=<your-api-token>

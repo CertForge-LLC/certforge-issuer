@@ -24,14 +24,29 @@ type CertForgeIssuer struct {
 
 // CertForgeIssuerSpec defines the desired state of CertForgeIssuer.
 type CertForgeIssuerSpec struct {
-	// URL is the base URL of the CertForge server, e.g. https://app.certgovernance.app
+	// URL is the base URL of the CertForge server.
+	// Use https://app.certgovernance.app for US East or https://eu.certgovernance.app for EU West.
+	// The URL (combined with the API token) determines which org and data region requests are routed to.
 	// +kubebuilder:validation:Required
 	URL string `json:"url"`
 
-	// AuthSecretRef references a Secret in the same namespace that contains
-	// a "token" key with the CertForge API bearer token.
+	// AuthSecretRef references a Secret containing a "token" key with the CertForge API bearer token.
+	// For CertForgeIssuer the Secret must be in the same namespace as the issuer.
+	// For CertForgeClusterIssuer the Secret is read from SecretNamespace (default: certforge-system).
 	// +kubebuilder:validation:Required
 	AuthSecretRef corev1.LocalObjectReference `json:"authSecretRef"`
+
+	// IssuanceProfileID is the optional default issuance profile ID for certificate requests
+	// routed through this issuer. Overrides the DTP default. Can be overridden per Certificate
+	// via the certforge.io/issuance-profile annotation.
+	// +optional
+	IssuanceProfileID string `json:"issuanceProfileID,omitempty"`
+
+	// SecretNamespace overrides the namespace used to read the authSecretRef Secret when
+	// the issuer kind is CertForgeClusterIssuer. Defaults to "certforge-system".
+	// Has no effect on namespace-scoped CertForgeIssuer resources.
+	// +optional
+	SecretNamespace string `json:"secretNamespace,omitempty"`
 }
 
 // CertForgeIssuerStatus defines the observed state of CertForgeIssuer.
