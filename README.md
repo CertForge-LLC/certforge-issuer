@@ -254,6 +254,8 @@ kubectl apply -f https://raw.githubusercontent.com/CertForge-LLC/certforge-issue
 
 ## How It Works
 
+![cert-manager + certforge-issuer architecture](docs/images/k8s-architecture.png)
+
 1. cert-manager creates a `CertificateRequest` with `issuerRef.group: certforge.io`
 2. The controller POSTs the CSR to `POST /api/v1/certificate-requests`
 3. CertForge checks the request against your Domain Trust Profiles
