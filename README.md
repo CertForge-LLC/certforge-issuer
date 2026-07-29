@@ -87,7 +87,8 @@ spec:
 ```
 
 > The `certforge-credentials` Secret was created by the Helm chart above.
-> For `CertForgeClusterIssuer`, the Secret must be in the `certforge-system` namespace.
+> For `CertForgeClusterIssuer`, the Secret must be in the `certforge-system` namespace
+> (or the namespace set in `secretNamespace`).
 
 **Reference it from your Certificate:**
 
@@ -127,7 +128,103 @@ spec:
     name: certforge-credentials
 ```
 
-The Secret must exist in the `certforge-system` namespace.
+The Secret is read from the `certforge-system` namespace by default. Use `secretNamespace` to
+override this if your credentials live elsewhere.
+
+### Data Residency
+
+CertForge operates in **US East** and **EU West**. Your organization's certificates, keys, and
+audit data are pinned to a single region by the API token — no cross-border data flows occur.
+
+Set `url` to the appropriate endpoint for your org's region:
+
+| Region | URL |
+|--------|-----|
+| US East (default) | `https://app.certgovernance.app` |
+| EU West (GDPR-aligned) | `https://eu.certgovernance.app` |
+
+The `url` and API token together route every certificate request to the correct region. No other
+configuration is needed.
+
+**EU West example:**
+
+```yaml
+apiVersion: certforge.io/v1alpha1
+kind: CertForgeClusterIssuer
+metadata:
+  name: certforge-eu
+spec:
+  url: https://eu.certgovernance.app
+  authSecretRef:
+    name: certforge-eu-credentials
+```
+
+```bash
+kubectl create secret generic certforge-eu-credentials \
+  --namespace certforge-system \
+  --from-literal=token=<your-eu-org-api-token>
+```
+
+### Issuance Profiles
+
+If your Domain Trust Profile has multiple CA configurations (for example, Let's Encrypt for
+external certs and an internal CA for service-mesh certs), you can pin an issuance profile at the
+issuer level or override it per Certificate.
+
+**Issuer-level default** — all certs from this issuer use the specified profile:
+
+```yaml
+apiVersion: certforge.io/v1alpha1
+kind: CertForgeClusterIssuer
+metadata:
+  name: certforge-internal
+spec:
+  url: https://app.certgovernance.app
+  authSecretRef:
+    name: certforge-credentials
+  issuanceProfileID: "your-internal-ca-profile-id"
+```
+
+**Per-Certificate override** — set the `certforge.io/issuance-profile` annotation on a
+`Certificate` resource to override the issuer default for that certificate only:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: external-cert
+  namespace: default
+  annotations:
+    certforge.io/issuance-profile: "your-letsencrypt-profile-id"
+spec:
+  secretName: external-cert-tls
+  dnsNames:
+    - api.example.com
+  issuerRef:
+    name: certforge-internal
+    kind: CertForgeClusterIssuer
+    group: certforge.io
+```
+
+The annotation takes precedence over `issuanceProfileID` in the issuer spec. If neither is set,
+CertForge uses the default profile configured on the matching Domain Trust Profile.
+
+### Custom Secret Namespace (ClusterIssuer)
+
+By default `CertForgeClusterIssuer` reads credentials from `certforge-system`. Override this with
+`secretNamespace`:
+
+```yaml
+apiVersion: certforge.io/v1alpha1
+kind: CertForgeClusterIssuer
+metadata:
+  name: certforge
+spec:
+  url: https://app.certgovernance.app
+  authSecretRef:
+    name: certforge-credentials
+  secretNamespace: my-secrets-namespace
+```
 
 ### Manual Installation (without Helm)
 
@@ -168,6 +265,23 @@ kubectl describe certificaterequest <name> -n <namespace>
 | `InvalidRequest=True` | `PolicyViolation` | Domain not covered by any CertForge DTP, or wildcard not permitted |
 | `Denied=True` | `Denied` | Request was manually denied in the CertForge approval queue |
 | `Ready=False` | `Pending` | Waiting for approval in CertForge, or transient connectivity issue |
+
+## Spec Reference
+
+### CertForgeIssuerSpec (shared by `CertForgeIssuer` and `CertForgeClusterIssuer`)
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `url` | Yes | Base URL of the CertForge server. Determines the data region. |
+| `authSecretRef.name` | Yes | Name of the Secret containing a `token` key with the API bearer token. |
+| `issuanceProfileID` | No | Default issuance profile ID for all certs from this issuer. Overrides the DTP default. Can be overridden per Certificate via the `certforge.io/issuance-profile` annotation. |
+| `secretNamespace` | No | Namespace to read the credentials Secret from (`CertForgeClusterIssuer` only). Defaults to `certforge-system`. |
+
+### Annotations
+
+| Annotation | Resource | Description |
+|------------|----------|-------------|
+| `certforge.io/issuance-profile` | `Certificate` | Overrides `issuanceProfileID` from the issuer spec for this certificate only. |
 
 ## Building
 
