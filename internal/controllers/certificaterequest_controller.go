@@ -9,6 +9,7 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -65,6 +66,11 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	cfURL, token, issuerProfileID, err := r.resolveIssuer(ctx, cr)
 	if err != nil {
 		logger.Error(err, "failed to resolve issuer")
+		setCondition(cr, cmapi.CertificateRequestConditionReady,
+			cmmeta.ConditionFalse, "IssuerNotReady", err.Error())
+		if serr := r.Status().Update(ctx, cr); serr != nil {
+			return ctrl.Result{}, serr
+		}
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 
@@ -188,11 +194,17 @@ func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cm
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name}, obj); err != nil {
 			return "", "", "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
+		if !apimeta.IsStatusConditionTrue(obj.Status.Conditions, "Ready") {
+			return "", "", "", fmt.Errorf("ClusterIssuer %q is not ready", cr.Spec.IssuerRef.Name)
+		}
 		spec = obj.Spec
 	case "CertForgeIssuer":
 		obj := &certforgev1alpha1.CertForgeIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name, Namespace: cr.Namespace}, obj); err != nil {
 			return "", "", "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+		}
+		if !apimeta.IsStatusConditionTrue(obj.Status.Conditions, "Ready") {
+			return "", "", "", fmt.Errorf("Issuer %q is not ready", cr.Spec.IssuerRef.Name)
 		}
 		spec = obj.Spec
 	default:
