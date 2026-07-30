@@ -21,13 +21,6 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificaterequests/status"]
     verbs: ["update", "patch"]
-  # Approve CertificateRequests on behalf of our issuers
-  - apiGroups: ["cert-manager.io"]
-    resources: ["signers"]
-    verbs: ["approve"]
-    resourceNames:
-      - "certforgeissuers.certforge.io/*"
-      - "certforgeclusterissuers.certforge.io/*"
   # Manage our own CRDs
   - apiGroups: ["certforge.io"]
     resources: ["certforgeissuers", "certforgeclusterissuers"]
@@ -35,18 +28,10 @@ rules:
   - apiGroups: ["certforge.io"]
     resources: ["certforgeissuers/status", "certforgeclusterissuers/status"]
     verbs: ["update", "patch"]
-  # Read credential Secrets
+  # Read credential Secrets (get only — no list/watch needed)
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
-  # Events
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-  # Leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -56,6 +41,32 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: certforge-issuer
+subjects:
+  - kind: ServiceAccount
+    name: certforge-issuer
+    namespace: certforge-system
+---
+# Leases are namespace-scoped to certforge-system to avoid granting
+# cluster-wide lease access just for leader election.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: certforge-issuer-leader-election
+  namespace: certforge-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: certforge-issuer-leader-election
+  namespace: certforge-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: certforge-issuer-leader-election
 subjects:
   - kind: ServiceAccount
     name: certforge-issuer

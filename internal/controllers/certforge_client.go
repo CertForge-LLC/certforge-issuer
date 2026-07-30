@@ -71,11 +71,11 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return "", &PolicyError{Message: string(b)}
 	}
 	if resp.StatusCode != http.StatusAccepted {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return "", fmt.Errorf("certforge returned %d: %s", resp.StatusCode, string(b))
 	}
 
@@ -88,6 +88,9 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 
 // Poll checks the status of a previously submitted request.
 func (c *certforgeClient) Poll(ctx context.Context, id string) (certResponse, error) {
+	if id == "" {
+		return certResponse{}, fmt.Errorf("empty request ID")
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		c.baseURL+"/api/v1/certificate-requests/"+id, nil)
 	if err != nil {
@@ -102,7 +105,7 @@ func (c *certforgeClient) Poll(ctx context.Context, id string) (certResponse, er
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return certResponse{}, fmt.Errorf("certforge returned %d: %s", resp.StatusCode, string(b))
 	}
 

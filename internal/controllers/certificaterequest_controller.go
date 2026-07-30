@@ -81,9 +81,9 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	// "rejected" is a sentinel written on PolicyError to prevent re-submission races.
 	if requestID == "rejected" {
-		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionInvalidRequest,
+		setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
 			cmmeta.ConditionTrue, "PolicyViolation", "Request rejected by CertForge policy")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.Status().Update(ctx, cr)
 	}
 
 	if requestID == "" {
@@ -92,21 +92,26 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		if err != nil {
 			var policyErr *PolicyError
 			if errors.As(err, &policyErr) {
-				// Write the sentinel annotation first so concurrent reconciles don't re-submit.
+				// Write the sentinel annotation so concurrent reconciles don't re-submit.
 				patch := client.MergeFrom(cr.DeepCopy())
 				if cr.Annotations == nil {
 					cr.Annotations = map[string]string{}
 				}
 				cr.Annotations[annotationRequestID] = "rejected"
-				_ = r.Patch(ctx, cr, patch)
+				if err := r.Patch(ctx, cr, patch); err != nil {
+					return ctrl.Result{}, fmt.Errorf("writing rejected annotation: %w", err)
+				}
 				logger.Info("CSR rejected by CertForge policy", "reason", policyErr.Message)
-				r.setCondition(ctx, cr, cmapi.CertificateRequestConditionInvalidRequest,
+				setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
 					cmmeta.ConditionTrue, "PolicyViolation", policyErr.Message)
-				return ctrl.Result{}, nil
+				return ctrl.Result{}, r.Status().Update(ctx, cr)
 			}
 			logger.Error(err, "failed to submit CSR to CertForge")
-			r.setCondition(ctx, cr, cmapi.CertificateRequestConditionReady,
+			setCondition(cr, cmapi.CertificateRequestConditionReady,
 				cmmeta.ConditionFalse, "Pending", fmt.Sprintf("Submitting to CertForge: %v", err))
+			if err := r.Status().Update(ctx, cr); err != nil {
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{RequeueAfter: requeueDelay}, nil
 		}
 
@@ -133,9 +138,11 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	switch result.Status {
 	case "issued":
+		// Take the patch baseline before mutating status so both the certificate
+		// field and the condition are written in a single Patch call.
 		patch := client.MergeFrom(cr.DeepCopy())
 		cr.Status.Certificate = []byte(result.Certificate)
-		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionReady,
+		setCondition(cr, cmapi.CertificateRequestConditionReady,
 			cmmeta.ConditionTrue, "Issued", "Certificate issued by CertForge")
 		if err := r.Status().Patch(ctx, cr, patch); err != nil {
 			return ctrl.Result{}, err
@@ -144,11 +151,11 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 
 	case "denied":
-		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionDenied,
+		setCondition(cr, cmapi.CertificateRequestConditionDenied,
 			cmmeta.ConditionTrue, "Denied",
 			fmt.Sprintf("Request denied by CertForge: %s", result.Reason))
 		logger.Info("certificate request denied", "requestID", requestID, "reason", result.Reason)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.Status().Update(ctx, cr)
 
 	default: // pending
 		msg := "Waiting for CertForge to issue certificate"
@@ -160,9 +167,12 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 				msg = fmt.Sprintf("%s (submitted %s ago)", msg, formatElapsed(time.Since(submitted)))
 			}
 		}
-		r.setCondition(ctx, cr, cmapi.CertificateRequestConditionReady,
+		setCondition(cr, cmapi.CertificateRequestConditionReady,
 			cmmeta.ConditionFalse, "Pending", msg)
 		logger.Info("request pending approval", "requestID", requestID)
+		if err := r.Status().Update(ctx, cr); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 }
@@ -210,8 +220,9 @@ func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cm
 	return spec.URL, token, spec.IssuanceProfileID, nil
 }
 
-func (r *CertificateRequestReconciler) setCondition(
-	ctx context.Context,
+// setCondition mutates cr.Status.Conditions in memory — callers own the status write.
+// LastTransitionTime is updated only when the condition's Status changes.
+func setCondition(
 	cr *cmapi.CertificateRequest,
 	condType cmapi.CertificateRequestConditionType,
 	status cmmeta.ConditionStatus,
@@ -220,11 +231,12 @@ func (r *CertificateRequestReconciler) setCondition(
 	now := metav1.Now()
 	for i, c := range cr.Status.Conditions {
 		if c.Type == condType {
+			if c.Status != status {
+				cr.Status.Conditions[i].LastTransitionTime = &now
+			}
 			cr.Status.Conditions[i].Status = status
 			cr.Status.Conditions[i].Reason = reason
 			cr.Status.Conditions[i].Message = message
-			cr.Status.Conditions[i].LastTransitionTime = &now
-			r.Status().Update(ctx, cr) //nolint:errcheck
 			return
 		}
 	}
@@ -235,7 +247,6 @@ func (r *CertificateRequestReconciler) setCondition(
 		Message:            message,
 		LastTransitionTime: &now,
 	})
-	r.Status().Update(ctx, cr) //nolint:errcheck
 }
 
 func isConditionTrue(cr *cmapi.CertificateRequest, t cmapi.CertificateRequestConditionType) bool {

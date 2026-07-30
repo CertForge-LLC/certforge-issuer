@@ -3,7 +3,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /certforge-issuer ./cmd/controller
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-w -s" -o /certforge-issuer ./cmd/controller
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /certforge-issuer /certforge-issuer
