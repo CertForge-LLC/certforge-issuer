@@ -11,7 +11,7 @@ keywords:
   - governance
 home: https://certgovernance.app
 sources:
-  - https://github.com/certforge/certforge-issuer
+  - https://github.com/CertForge-LLC/certforge-issuer
 maintainers:
   - name: CertForge
-    email: support@certforge.xyz
+    email: hello@certgovernance.app
