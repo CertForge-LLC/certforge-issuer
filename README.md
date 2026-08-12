@@ -55,8 +55,8 @@ Complete these steps first — they take about five minutes.
    include that pattern (or `*.example.com`). Requests for domains not covered by any DTP are
    rejected with an `InvalidRequest` condition on the `CertificateRequest`.
 
-3. **Generate an API token** — go to Settings → API Keys and create a token scoped to your
-   organization. You'll supply this token during Helm installation in the next step.
+3. **Generate an API token** — go to Settings → API Keys and create a token with the **enroll**
+   and **read** scopes. You'll supply this token during Helm installation in the next step.
 
 ## Quick Start
 
@@ -111,18 +111,22 @@ spec:
 cert-manager creates a `CertificateRequest`, the controller submits it to CertForge for policy
 evaluation, and the signed certificate is returned once approved and issued.
 
-### Verify before deploying to a cluster
+### A note on cert-manager approval
 
-CertForge includes a built-in integration test that simulates the full cert-manager flow — policy
-evaluation, approval, and CA issuance — without needing a live Kubernetes cluster.
+cert-manager's built-in approver only auto-approves requests for its own built-in issuers (ACME,
+CA, SelfSigned). For `certforge-issuer`, `CertificateRequest` objects will show an empty
+`APPROVED` column until they are approved — the controller will not submit the CSR to CertForge
+until the Approved condition is set.
 
-Go to **Integrations → cert-manager** in the CertForge UI and click **Deploy & Watch**. It
-generates a real CSR, submits it through your Trust Profile and approval configuration, and shows
-the result in real time. The issued certificate appears in Certificate Requests exactly as it would
-from a live cluster.
+**For production:** install
+[cert-manager-approver-policy](https://cert-manager.io/docs/policy/approval/approver-policy/)
+to auto-approve requests for `certforge.io` issuers based on policy rules.
 
-Use this to confirm your Trust Profile covers the domains you intend to use and that your CA
-configuration is working before installing certforge-issuer.
+**For local testing:** approve manually with `cmctl`:
+
+```bash
+cmctl approve <certificaterequest-name> -n <namespace>
+```
 
 ## Usage
 
