@@ -157,11 +157,12 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 
 	case "denied":
+		patch := client.MergeFrom(cr.DeepCopy())
 		setCondition(cr, cmapi.CertificateRequestConditionDenied,
 			cmmeta.ConditionTrue, "Denied",
 			fmt.Sprintf("Request denied by CertForge: %s", result.Reason))
 		logger.Info("certificate request denied", "requestID", requestID, "reason", result.Reason)
-		return ctrl.Result{}, r.Status().Update(ctx, cr)
+		return ctrl.Result{}, r.Status().Patch(ctx, cr, patch)
 
 	default: // pending
 		msg := "Waiting for CertForge to issue certificate"
