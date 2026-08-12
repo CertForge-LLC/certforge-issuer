@@ -16,6 +16,19 @@ type PolicyError struct{ Message string }
 
 func (e *PolicyError) Error() string { return e.Message }
 
+// apiErrMessage extracts the human-readable message from a CertForge error
+// body. The API returns {"error":"..."} JSON; if parsing fails the raw body
+// is returned so no information is lost.
+func apiErrMessage(b []byte) string {
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(b, &envelope) == nil && envelope.Error != "" {
+		return envelope.Error
+	}
+	return string(b)
+}
+
 // certforgeClient talks to the CertForge REST API.
 type certforgeClient struct {
 	baseURL string
@@ -72,18 +85,11 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		// Parse {"error":"..."} and surface just the message, not raw JSON.
-		var apiErr struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(b, &apiErr) == nil && apiErr.Error != "" {
-			return "", &PolicyError{Message: apiErr.Error}
-		}
-		return "", &PolicyError{Message: string(b)}
+		return "", &PolicyError{Message: apiErrMessage(b)}
 	}
 	if resp.StatusCode != http.StatusAccepted {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return "", fmt.Errorf("certforge returned %d: %s", resp.StatusCode, string(b))
+		return "", fmt.Errorf("certforge returned %d: %s", resp.StatusCode, apiErrMessage(b))
 	}
 
 	var out certResponse
@@ -113,7 +119,7 @@ func (c *certforgeClient) Poll(ctx context.Context, id string) (certResponse, er
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return certResponse{}, fmt.Errorf("certforge returned %d: %s", resp.StatusCode, string(b))
+		return certResponse{}, fmt.Errorf("certforge returned %d: %s", resp.StatusCode, apiErrMessage(b))
 	}
 
 	var out certResponse
