@@ -72,6 +72,13 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		// Parse {"error":"..."} and surface just the message, not raw JSON.
+		var apiErr struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(b, &apiErr) == nil && apiErr.Error != "" {
+			return "", &PolicyError{Message: apiErr.Error}
+		}
 		return "", &PolicyError{Message: string(b)}
 	}
 	if resp.StatusCode != http.StatusAccepted {
