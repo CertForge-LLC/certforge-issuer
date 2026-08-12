@@ -156,12 +156,22 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		logger.Info("certificate issued", "requestID", requestID)
 		return ctrl.Result{}, nil
 
-	case "denied":
+	case "rejected":
+		// Use InvalidRequest (not Denied) because cert-manager's webhook forbids
+		// both Approved and Denied conditions coexisting on the same request.
+		// approver-policy already set Approved=True; setting Denied=True causes
+		// the webhook to reject the patch and the controller loops forever.
+		// InvalidRequest is the correct terminal condition for an issuer to signal
+		// "this request will not be issued" — it coexists with Approved and is
+		// never retried by cert-manager.
 		patch := client.MergeFrom(cr.DeepCopy())
-		setCondition(cr, cmapi.CertificateRequestConditionDenied,
-			cmmeta.ConditionTrue, "Denied",
-			fmt.Sprintf("Request denied by CertForge: %s", result.Reason))
-		logger.Info("certificate request denied", "requestID", requestID, "reason", result.Reason)
+		msg := "Request rejected by CertForge approver"
+		if result.Reason != "" {
+			msg = fmt.Sprintf("Request rejected by CertForge approver: %s", result.Reason)
+		}
+		setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
+			cmmeta.ConditionTrue, "Rejected", msg)
+		logger.Info("certificate request rejected by approver", "requestID", requestID, "reason", result.Reason)
 		return ctrl.Result{}, r.Status().Patch(ctx, cr, patch)
 
 	default: // pending

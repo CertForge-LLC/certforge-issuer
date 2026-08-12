@@ -54,7 +54,7 @@ type submitRequest struct {
 
 type certResponse struct {
 	ID          string `json:"id"`
-	Status      string `json:"status"`               // pending | issued | denied
+	Status      string `json:"status"`               // pending | issued | rejected (human) | denied (policy)
 	Certificate string `json:"certificate,omitempty"` // PEM when issued
 	Reason      string `json:"reason,omitempty"`
 }
