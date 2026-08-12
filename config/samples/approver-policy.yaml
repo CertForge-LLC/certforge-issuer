@@ -14,7 +14,7 @@
 # Prerequisites:
 #   1. Install cert-manager-approver-policy:
 #        helm upgrade cert-manager-approver-policy \
-#          oci://ghcr.io/cert-manager/charts/cert-manager-approver-policy \
+#          jetstack/cert-manager-approver-policy \
 #          --install --namespace cert-manager --wait
 #
 #   2. Disable the built-in approver so it doesn't conflict (required when
@@ -25,6 +25,13 @@
 #
 #   3. Apply this file:
 #        kubectl apply -f approver-policy.yaml
+#
+# IMPORTANT: The CertificateRequestPolicy alone is not enough. approver-policy
+# uses Kubernetes RBAC to determine which policies apply to which requesters.
+# The ClusterRole + ClusterRoleBinding at the bottom of this file grant the
+# cert-manager controller service account permission to use this policy.
+# Without that RBAC, every request will be logged as "not applicable for any
+# policy" and never approved.
 #
 # Reference: https://cert-manager.io/docs/policy/approval/approver-policy/
 ---
@@ -69,6 +76,36 @@ spec:
   selector:
     issuerRef:
       group: certforge.io
+---
+# REQUIRED: RBAC that lets approver-policy evaluate this policy for requests
+# created by the cert-manager controller.
+#
+# approver-policy uses Kubernetes RBAC to check whether the *requester*
+# (the cert-manager controller service account) is allowed to "use" a given
+# CertificateRequestPolicy. Without this binding, every CertificateRequest
+# will be logged as "not applicable for any policy" and never auto-approved.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cert-manager-certforge-auto-approve
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames: ["certforge-auto-approve"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cert-manager-certforge-auto-approve
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-certforge-auto-approve
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager
+    namespace: cert-manager
 ---
 # OPTION 2: Namespace-restricted — only auto-approve in namespaces labeled
 # certforge-managed=true. Use when you want Kubernetes-side namespace scoping

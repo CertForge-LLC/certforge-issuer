@@ -126,8 +126,9 @@ rule just needs to unblock the approval gate:
 
 ```bash
 # Install cert-manager-approver-policy
+helm repo add jetstack https://charts.jetstack.io && helm repo update
 helm upgrade cert-manager-approver-policy \
-  oci://ghcr.io/cert-manager/charts/cert-manager-approver-policy \
+  jetstack/cert-manager-approver-policy \
   --install --namespace cert-manager --wait
 
 # Disable the built-in approver (required when using approver-policy)
