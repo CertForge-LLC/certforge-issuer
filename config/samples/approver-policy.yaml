@@ -1,0 +1,127 @@
+# cert-manager-approver-policy integration for certforge-issuer
+#
+# cert-manager's built-in approver only auto-approves requests for its own
+# built-in issuers (ACME, CA, SelfSigned). CertificateRequest objects
+# directed at certforge-issuer sit with an empty APPROVED column until they
+# are approved — the controller will not submit the CSR to CertForge until
+# the Approved condition is set.
+#
+# These CertificateRequestPolicy resources use cert-manager-approver-policy
+# to auto-approve requests directed at certforge.io issuers. CertForge itself
+# enforces domain policy via Domain Trust Profiles, so this policy only needs
+# to unblock the Kubernetes-side gate — actual governance happens in CertForge.
+#
+# Prerequisites:
+#   1. Install cert-manager-approver-policy:
+#        helm upgrade cert-manager-approver-policy \
+#          oci://ghcr.io/cert-manager/charts/cert-manager-approver-policy \
+#          --install --namespace cert-manager --wait
+#
+#   2. Disable the built-in approver so it doesn't conflict (required when
+#      using approver-policy with external issuers):
+#        helm upgrade cert-manager jetstack/cert-manager \
+#          --namespace cert-manager --reuse-values \
+#          --set disableAutoApproval=true
+#
+#   3. Apply this file:
+#        kubectl apply -f approver-policy.yaml
+#
+# Reference: https://cert-manager.io/docs/policy/approval/approver-policy/
+---
+# OPTION 1 (recommended): Permissive — approve any request targeting a
+# certforge.io issuer, in any namespace. CertForge handles all policy.
+#
+# This is the right choice when CertForge Domain Trust Profiles are your
+# authoritative policy layer and you want cert-manager to be a pass-through.
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: certforge-auto-approve
+spec:
+  # Allow any combination of common name, DNS names, IPs, URIs, and usages.
+  # CertForge Domain Trust Profiles enforce the real policy — what CAs are
+  # allowed, which domains are permitted, whether wildcards are approved, etc.
+  allowed:
+    commonName:
+      value: "*"
+    dnsNames:
+      values:
+        - "*"
+    ipAddresses:
+      values:
+        - "*"
+    uris:
+      values:
+        - "*"
+    emailAddresses:
+      values:
+        - "*"
+    usages:
+      - signing
+      - digital signature
+      - key encipherment
+      - server auth
+      - client auth
+      - code signing
+      - email protection
+  # Match any issuer in the certforge.io group — covers both
+  # CertForgeIssuer (namespaced) and CertForgeClusterIssuer (cluster-scoped).
+  selector:
+    issuerRef:
+      group: certforge.io
+---
+# OPTION 2: Namespace-restricted — only auto-approve in namespaces labeled
+# certforge-managed=true. Use when you want Kubernetes-side namespace scoping
+# on top of CertForge's domain policy.
+#
+# Label a namespace:
+#   kubectl label namespace default certforge-managed=true
+#
+# apiVersion: policy.cert-manager.io/v1alpha1
+# kind: CertificateRequestPolicy
+# metadata:
+#   name: certforge-auto-approve-labeled-ns
+# spec:
+#   allowed:
+#     commonName:
+#       value: "*"
+#     dnsNames:
+#       values:
+#         - "*"
+#     usages:
+#       - signing
+#       - digital signature
+#       - key encipherment
+#       - server auth
+#       - client auth
+#   selector:
+#     issuerRef:
+#       group: certforge.io
+#     namespace:
+#       matchLabels:
+#         certforge-managed: "true"
+---
+# OPTION 3: Domain-scoped — only approve requests for specific domain patterns,
+# providing a defense-in-depth layer on top of CertForge policy. Use when you
+# want Kubernetes RBAC to enforce domain restrictions before CertForge even
+# sees the request.
+#
+# apiVersion: policy.cert-manager.io/v1alpha1
+# kind: CertificateRequestPolicy
+# metadata:
+#   name: certforge-auto-approve-internal
+# spec:
+#   allowed:
+#     dnsNames:
+#       values:
+#         - "*.internal.example.com"
+#         - "*.svc.cluster.local"
+#     usages:
+#       - signing
+#       - digital signature
+#       - key encipherment
+#       - server auth
+#       - client auth
+#   selector:
+#     issuerRef:
+#       group: certforge.io

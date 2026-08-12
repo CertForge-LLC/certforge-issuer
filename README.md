@@ -120,7 +120,28 @@ until the Approved condition is set.
 
 **For production:** install
 [cert-manager-approver-policy](https://cert-manager.io/docs/policy/approval/approver-policy/)
-to auto-approve requests for `certforge.io` issuers based on policy rules.
+and deploy a `CertificateRequestPolicy` that targets `certforge.io`. CertForge
+already enforces domain policy via Domain Trust Profiles, so the Kubernetes-side
+rule just needs to unblock the approval gate:
+
+```bash
+# Install cert-manager-approver-policy
+helm upgrade cert-manager-approver-policy \
+  oci://ghcr.io/cert-manager/charts/cert-manager-approver-policy \
+  --install --namespace cert-manager --wait
+
+# Disable the built-in approver (required when using approver-policy)
+helm upgrade cert-manager jetstack/cert-manager \
+  --namespace cert-manager --reuse-values \
+  --set disableAutoApproval=true
+
+# Apply the policy
+kubectl apply -f https://raw.githubusercontent.com/CertForge-LLC/certforge-issuer/main/config/samples/approver-policy.yaml
+```
+
+The sample policy approves any request targeting a `certforge.io` issuer.
+Namespace-scoped and domain-scoped variants are included (commented out) in the
+same file. See [config/samples/approver-policy.yaml](config/samples/approver-policy.yaml).
 
 **For local testing:** approve manually with `cmctl`:
 
