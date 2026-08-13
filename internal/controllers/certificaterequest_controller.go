@@ -20,9 +20,14 @@ import (
 )
 
 const (
-	annotationRequestID      = "certforge.io/request-id"
-	annotationSubmittedAt    = "certforge.io/submitted-at"
+	annotationRequestID       = "certforge.io/request-id"
+	annotationSubmittedAt     = "certforge.io/submitted-at"
 	annotationIssuanceProfile = "certforge.io/issuance-profile"
+	// annotationDeniedAt is written on the parent Certificate when a CR is permanently
+	// denied. It persists across CertificateRequest GC so retry CRs created by
+	// cert-manager's backoff timer are denied immediately without re-submitting to CertForge.
+	// Operators clear the cycle by deleting the Certificate object.
+	annotationDeniedAt = "certforge.io/denied-at"
 )
 
 // CertificateRequestReconciler watches CertificateRequest objects and
@@ -69,6 +74,57 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// If an older certforge-auto-approve policy happens to race and set Approved=True
 	// first, we fall back to InvalidRequest for graceful degradation.
 
+	// Propagate denial from the parent Certificate annotation or sibling CRs.
+	//
+	// cert-manager's Certificate controller retries failed requests on an exponential
+	// backoff (≈1 h, 2 h, …) even when Denied=True — it creates a brand-new
+	// CertificateRequest for the same Certificate object. Without this check the issuer
+	// would re-submit the new CR to CertForge, generating another approval notification
+	// on every retry cycle.
+	//
+	// Two layers of detection (most durable first):
+	//  1. Parent Certificate annotation certforge.io/denied-at — written when we first
+	//     set Denied=True and survives CertificateRequest GC.
+	//  2. Sibling CertificateRequest with Denied=True — catches the case where the old
+	//     CR is still present when the retry CR appears.
+	//
+	// Operators break the cycle by deleting the Certificate object.
+	const deniedMsg = "A previous request for this Certificate was rejected by a CertForge approver. " +
+		"Delete the Certificate object to submit a new certificate request."
+
+	if certName := cr.Labels["cert-manager.io/certificate-name"]; certName != "" {
+		// Layer 1: check parent Certificate annotation.
+		parentCert := &cmapi.Certificate{}
+		if err := r.Get(ctx, types.NamespacedName{Name: certName, Namespace: cr.Namespace}, parentCert); err == nil {
+			if parentCert.Annotations[annotationDeniedAt] != "" {
+				logger.Info("parent Certificate has denied-at annotation — propagating denial without re-submitting",
+					"certificate", certName, "deniedAt", parentCert.Annotations[annotationDeniedAt])
+				setRejectedCondition(cr, "PreviouslyDenied", deniedMsg)
+				return ctrl.Result{}, r.Status().Update(ctx, cr)
+			}
+		}
+
+		// Layer 2: check sibling CertificateRequests.
+		siblingList := &cmapi.CertificateRequestList{}
+		if err := r.List(ctx, siblingList,
+			client.InNamespace(cr.Namespace),
+			client.MatchingLabels{"cert-manager.io/certificate-name": certName},
+		); err == nil {
+			for i := range siblingList.Items {
+				sibling := &siblingList.Items[i]
+				if sibling.Name == cr.Name {
+					continue
+				}
+				if isConditionTrue(sibling, cmapi.CertificateRequestConditionDenied) {
+					logger.Info("propagating denial from sibling CertificateRequest — not re-submitting",
+						"sibling", sibling.Name)
+					setRejectedCondition(cr, "PreviouslyDenied", deniedMsg)
+					return ctrl.Result{}, r.Status().Update(ctx, cr)
+				}
+			}
+		}
+	}
+
 	// Resolve the issuer and load credentials.
 	cfURL, token, issuerProfileID, err := r.resolveIssuer(ctx, cr)
 	if err != nil {
@@ -95,6 +151,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// "rejected" is a sentinel written on PolicyError to prevent re-submission races.
 	if requestID == "rejected" {
 		setRejectedCondition(cr, "PolicyViolation", "Request rejected by CertForge policy")
+		r.stampCertificateDenied(ctx, cr)
 		return ctrl.Result{}, r.Status().Update(ctx, cr)
 	}
 
@@ -115,6 +172,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 				}
 				logger.Info("CSR rejected by CertForge policy", "reason", policyErr.Message)
 				setRejectedCondition(cr, "PolicyViolation", policyErr.Message)
+				r.stampCertificateDenied(ctx, cr)
 				return ctrl.Result{}, r.Status().Update(ctx, cr)
 			}
 			logger.Error(err, "failed to submit CSR to CertForge")
@@ -180,6 +238,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 			msg = fmt.Sprintf("Request rejected by CertForge approver: %s", result.Reason)
 		}
 		setRejectedCondition(cr, "Rejected", msg)
+		r.stampCertificateDenied(ctx, cr)
 		logger.Info("certificate request denied by CertForge approver", "requestID", requestID, "reason", result.Reason)
 		return ctrl.Result{}, r.Status().Patch(ctx, cr, patch)
 
@@ -288,6 +347,32 @@ func isConditionTrue(cr *cmapi.CertificateRequest, t cmapi.CertificateRequestCon
 		}
 	}
 	return false
+}
+
+// stampCertificateDenied writes annotationDeniedAt on the parent Certificate so that
+// future retry CertificateRequests (created by cert-manager's backoff timer) are denied
+// immediately without re-submitting to CertForge, even after the denied CR is GC'd.
+// Errors are logged and silently ignored — the CR's Denied condition is already set and
+// that is the authoritative signal; the annotation is a durability optimisation.
+func (r *CertificateRequestReconciler) stampCertificateDenied(ctx context.Context, cr *cmapi.CertificateRequest) {
+	certName := cr.Labels["cert-manager.io/certificate-name"]
+	if certName == "" {
+		return
+	}
+	logger := log.FromContext(ctx)
+	cert := &cmapi.Certificate{}
+	if err := r.Get(ctx, types.NamespacedName{Name: certName, Namespace: cr.Namespace}, cert); err != nil {
+		logger.V(1).Info("could not fetch parent Certificate to stamp denied-at", "error", err)
+		return
+	}
+	patch := client.MergeFrom(cert.DeepCopy())
+	if cert.Annotations == nil {
+		cert.Annotations = map[string]string{}
+	}
+	cert.Annotations[annotationDeniedAt] = time.Now().UTC().Format(time.RFC3339)
+	if err := r.Patch(ctx, cert, patch); err != nil {
+		logger.V(1).Info("could not stamp denied-at on parent Certificate", "error", err)
+	}
 }
 
 // setRejectedCondition marks a CertificateRequest as permanently rejected.

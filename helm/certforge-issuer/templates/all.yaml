@@ -30,6 +30,12 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificaterequests/status"]
     verbs: ["update", "patch"]
+  # Read and annotate parent Certificate objects so the certforge.io/denied-at
+  # annotation persists after denied CertificateRequests are GC'd, preventing
+  # cert-manager's backoff retries from re-submitting to CertForge.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "patch"]
   # Approve/deny CertificateRequests for certforge.io issuers.
   # Required so certforge-issuer can set Denied=True on rejection, which is the
   # only truly terminal condition in cert-manager (prevents retry loops).
