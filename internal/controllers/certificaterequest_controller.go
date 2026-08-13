@@ -55,12 +55,19 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	// cert-manager v1.3+ requires issuers to wait for the Approved condition before signing.
-	// Without this check the issuer acts before human/policy approvers have had a chance to deny the request.
-	if !isConditionTrue(cr, cmapi.CertificateRequestConditionApproved) {
-		logger.Info("CertificateRequest not yet approved — waiting", "name", req.Name)
-		return ctrl.Result{}, nil
-	}
+	// certforge-issuer acts as its own approver: it submits the CSR to CertForge
+	// immediately (without waiting for an external Approved condition) and then sets
+	// Denied or Approved+cert based on CertForge's decision.
+	//
+	// Why: cert-manager's webhook forbids Denied=True when Approved=True is already set
+	// on the same CertificateRequest. If an external approver-policy runs first and sets
+	// Approved=True, we can never set Denied=True on a human rejection — so cert-manager
+	// treats InvalidRequest as a failure and retries indefinitely.
+	//
+	// By submitting before any external approver sets Approved, we can set Denied=True
+	// on rejection, which is the only truly terminal condition in cert-manager (no retry).
+	// If an older certforge-auto-approve policy happens to race and set Approved=True
+	// first, we fall back to InvalidRequest for graceful degradation.
 
 	// Resolve the issuer and load credentials.
 	cfURL, token, issuerProfileID, err := r.resolveIssuer(ctx, cr)
@@ -87,8 +94,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	// "rejected" is a sentinel written on PolicyError to prevent re-submission races.
 	if requestID == "rejected" {
-		setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
-			cmmeta.ConditionTrue, "PolicyViolation", "Request rejected by CertForge policy")
+		setRejectedCondition(cr, "PolicyViolation", "Request rejected by CertForge policy")
 		return ctrl.Result{}, r.Status().Update(ctx, cr)
 	}
 
@@ -108,8 +114,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 					return ctrl.Result{}, fmt.Errorf("writing rejected annotation: %w", err)
 				}
 				logger.Info("CSR rejected by CertForge policy", "reason", policyErr.Message)
-				setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
-					cmmeta.ConditionTrue, "PolicyViolation", policyErr.Message)
+				setRejectedCondition(cr, "PolicyViolation", policyErr.Message)
 				return ctrl.Result{}, r.Status().Update(ctx, cr)
 			}
 			logger.Error(err, "failed to submit CSR to CertForge")
@@ -144,12 +149,18 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	switch result.Status {
 	case "issued":
-		// Take the patch baseline before mutating status so both the certificate
-		// field and the condition are written in a single Patch call.
+		// Take the patch baseline before mutating status so all fields are
+		// written in a single Patch call.
 		patch := client.MergeFrom(cr.DeepCopy())
 		cr.Status.Certificate = []byte(result.Certificate)
 		setCondition(cr, cmapi.CertificateRequestConditionReady,
 			cmmeta.ConditionTrue, "Issued", "Certificate issued by CertForge")
+		// If no external approver has run yet, set Approved=True ourselves so
+		// cert-manager's issuing controller accepts the certificate bytes.
+		if !isConditionTrue(cr, cmapi.CertificateRequestConditionApproved) {
+			setCondition(cr, cmapi.CertificateRequestConditionApproved,
+				cmmeta.ConditionTrue, "Approved", "Approved by CertForge")
+		}
 		if err := r.Status().Patch(ctx, cr, patch); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -157,21 +168,19 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 
 	case "rejected":
-		// Use InvalidRequest (not Denied) because cert-manager's webhook forbids
-		// both Approved and Denied conditions coexisting on the same request.
-		// approver-policy already set Approved=True; setting Denied=True causes
-		// the webhook to reject the patch and the controller loops forever.
-		// InvalidRequest is the correct terminal condition for an issuer to signal
-		// "this request will not be issued" — it coexists with Approved and is
-		// never retried by cert-manager.
+		// Use Denied=True — the only condition cert-manager treats as truly
+		// terminal (no new CertificateRequest is created).
+		// We can set Denied here because we no longer wait for an external
+		// approver to set Approved=True first. If an older certforge-auto-approve
+		// policy races and sets Approved=True before we get here, fall back to
+		// InvalidRequest (webhook blocks Denied+Approved coexisting).
 		patch := client.MergeFrom(cr.DeepCopy())
 		msg := "Request rejected by CertForge approver"
 		if result.Reason != "" {
 			msg = fmt.Sprintf("Request rejected by CertForge approver: %s", result.Reason)
 		}
-		setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
-			cmmeta.ConditionTrue, "Rejected", msg)
-		logger.Info("certificate request rejected by approver", "requestID", requestID, "reason", result.Reason)
+		setRejectedCondition(cr, "Rejected", msg)
+		logger.Info("certificate request denied by CertForge approver", "requestID", requestID, "reason", result.Reason)
 		return ctrl.Result{}, r.Status().Patch(ctx, cr, patch)
 
 	default: // pending
@@ -279,6 +288,25 @@ func isConditionTrue(cr *cmapi.CertificateRequest, t cmapi.CertificateRequestCon
 		}
 	}
 	return false
+}
+
+// setRejectedCondition marks a CertificateRequest as permanently rejected.
+//
+// Preferred: Denied=True — cert-manager will not create a new CertificateRequest.
+// Fallback:  InvalidRequest=True — used when Approved=True is already set, because
+//            cert-manager's webhook forbids Denied and Approved coexisting on the same
+//            request. InvalidRequest is less terminal (cert-manager v1.21 retries), but
+//            it is the best we can do in that situation. Operators should remove any
+//            certforge-auto-approve CertificateRequestPolicy so we can always use Denied.
+func setRejectedCondition(cr *cmapi.CertificateRequest, reason, message string) {
+	if isConditionTrue(cr, cmapi.CertificateRequestConditionApproved) {
+		// Approved already set — can't use Denied; fall back to InvalidRequest.
+		setCondition(cr, cmapi.CertificateRequestConditionInvalidRequest,
+			cmmeta.ConditionTrue, reason, message)
+		return
+	}
+	setCondition(cr, cmapi.CertificateRequestConditionDenied,
+		cmmeta.ConditionTrue, reason, message)
 }
 
 func (r *CertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -30,6 +30,15 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificaterequests/status"]
     verbs: ["update", "patch"]
+  # Approve/deny CertificateRequests for certforge.io issuers.
+  # Required so certforge-issuer can set Denied=True on rejection, which is the
+  # only truly terminal condition in cert-manager (prevents retry loops).
+  - apiGroups: ["cert-manager.io"]
+    resources: ["signers"]
+    verbs: ["approve"]
+    resourceNames:
+      - "certforgeclusterissuers.certforge.io/*"
+      - "certforgeissuers.certforge.io/*"
   - apiGroups: ["certforge.io"]
     resources: ["certforgeissuers", "certforgeclusterissuers"]
     verbs: ["get", "list", "watch"]
