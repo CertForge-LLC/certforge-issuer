@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cftest-manual
+  namespace: default
+spec:
+  secretName: cftest-manual-tls
+  dnsNames:
+    - cftest-manual.${TEST_DOMAIN}
+  issuerRef:
+    group: certforge.io
+    kind: CertForgeClusterIssuer
+    name: certforge
