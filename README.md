@@ -60,8 +60,11 @@ Complete these steps first — they take about five minutes.
 
 ## Quick Start
 
-**Install the issuer** (the Helm chart creates a `certforge-credentials` Secret in
-`certforge-system` automatically from the token you provide):
+**Install the issuer.** Choose Secret-based auth (simplest) or Workload Identity
+(no long-lived token in the cluster). See [Workload Identity](#workload-identity) for
+the keyless path.
+
+**Secret-based auth** — the Helm chart creates a `certforge-credentials` Secret automatically:
 
 ```bash
 helm install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
@@ -82,13 +85,18 @@ metadata:
   namespace: default
 spec:
   url: https://app.certgovernance.app
+  # Option A: Secret-based (long-lived token)
   authSecretRef:
     name: certforge-credentials
+  # Option B: Workload Identity (short-lived projected token — no Secret needed)
+  # workloadIdentity:
+  #   audience: https://app.certgovernance.app
 ```
 
 > The `certforge-credentials` Secret was created by the Helm chart above.
 > For `CertForgeClusterIssuer`, the Secret must be in the `certforge-system` namespace
 > (or the namespace set in `secretNamespace`).
+> Exactly one of `authSecretRef` or `workloadIdentity` must be set.
 
 **Reference it from your Certificate:**
 
@@ -163,12 +171,16 @@ metadata:
   name: certforge
 spec:
   url: https://app.certgovernance.app
+  # Option A: Secret-based auth (long-lived token)
   authSecretRef:
     name: certforge-credentials
+  # Option B: Workload Identity (no Secret — see Workload Identity section)
+  # workloadIdentity:
+  #   audience: https://app.certgovernance.app
 ```
 
-The Secret is read from the `certforge-system` namespace by default. Use `secretNamespace` to
-override this if your credentials live elsewhere.
+For Secret-based auth, the Secret is read from `certforge-system` by default. Use `secretNamespace`
+to override this. Exactly one of `authSecretRef` or `workloadIdentity` must be set.
 
 ### Data Residency
 
@@ -265,6 +277,78 @@ spec:
   secretNamespace: my-secrets-namespace
 ```
 
+### Workload Identity
+
+Workload Identity lets the controller authenticate using a short-lived
+[projected ServiceAccount token](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#serviceaccount-token-volume-projection)
+instead of a long-lived API key stored in a Secret. The kubelet writes and rotates the token
+automatically — no Kubernetes Secret is required.
+
+**How it works:** The Helm chart mounts a projected `serviceAccountToken` volume. The kubelet
+writes a signed OIDC JWT to `/var/run/secrets/certforge/token`, bound to the configured
+audience. The controller re-reads this file on every API call, so kubelet rotation is fully
+transparent.
+
+**Setup (4 steps):**
+
+**1 — Find your cluster's OIDC issuer URL:**
+
+```bash
+kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
+```
+
+**2 — Add a Workload Identity Provider in CertForge:**
+
+Go to **Settings → Workload Identity → Add Provider**:
+
+| Field | Value |
+|-------|-------|
+| Name | `certforge-issuer (production)` |
+| OIDC Issuer URL | The URL from step 1 |
+| Audience | `https://app.certgovernance.app` (or your EU URL) |
+| Allowed Subjects | `system:serviceaccount:certforge-system:certforge-issuer` |
+| Scopes | `read`, `enroll` |
+
+Use an exact subject for production; trailing `*` wildcards (e.g. `system:serviceaccount:certforge-system:*`) are supported but should only be used in dev/staging.
+
+**3 — Install with workload identity enabled:**
+
+```bash
+helm upgrade --install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
+  --namespace certforge-system \
+  --create-namespace \
+  --set certforge.url=https://app.certgovernance.app \
+  --set tokenSecret.create=false \
+  --set workloadIdentity.enabled=true \
+  --set workloadIdentity.audience=https://app.certgovernance.app
+```
+
+**4 — Create the issuer with `workloadIdentity` instead of `authSecretRef`:**
+
+```yaml
+apiVersion: certforge.io/v1alpha1
+kind: CertForgeClusterIssuer
+metadata:
+  name: certforge
+spec:
+  url: https://app.certgovernance.app
+  workloadIdentity:
+    audience: https://app.certgovernance.app
+    # tokenFile: /var/run/secrets/certforge/token  # optional — this is the default
+```
+
+**Migrating from Secret-based auth:**
+
+1. Add the Workload Identity Provider in CertForge (step 2 above).
+2. Upgrade the Helm chart with `workloadIdentity.enabled=true` and `tokenSecret.create=false`.
+3. Update the issuer spec to use `workloadIdentity` instead of `authSecretRef`.
+4. Once `Ready=True` is confirmed, delete the old Secret:
+   ```bash
+   kubectl delete secret certforge-credentials --namespace certforge-system
+   ```
+
+---
+
 ### Manual Installation (without Helm)
 
 ```bash
@@ -348,7 +432,7 @@ kubectl describe certforgeclusterissuer certforge   # full status + conditions
 The token in the credentials Secret is invalid, expired, or was revoked.
 
 ```bash
-# Identify the Secret name
+# Identify the Secret name (only applies to Secret-based auth)
 kubectl get certforgeclusterissuer certforge -o jsonpath='{.spec.authSecretRef.name}'
 
 # Replace the token (certforge-system namespace for ClusterIssuer)
@@ -405,6 +489,22 @@ kubectl create secret generic certforge-credentials \
   --namespace certforge-system \
   --from-literal=token=<your-api-token>
 ```
+
+If you intended to use Workload Identity (no Secret), make sure your issuer spec uses
+`workloadIdentity` instead of `authSecretRef`, and that the Helm chart was installed with
+`workloadIdentity.enabled=true`.
+
+---
+
+**Reason: `PingFailed` — Workload Identity token issues**
+
+For issuers using `workloadIdentity`:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `read token file … no such file or directory` | The projected volume was not mounted — the controller pod was not deployed with `workloadIdentity.enabled=true` | Upgrade the Helm release with `--set workloadIdentity.enabled=true` |
+| `token rejected by CertForge (401 Unauthorized)` | Audience mismatch, OIDC issuer URL wrong, or Workload Identity Provider disabled/deleted in CertForge | Verify the audience in the issuer spec matches the CertForge WI Provider; re-check the OIDC issuer URL with `kubectl get --raw /.well-known/openid-configuration \| jq -r .issuer` |
+| `subject not permitted (403 Forbidden)` | The controller's ServiceAccount subject (`system:serviceaccount:certforge-system:certforge-issuer`) is not in the allowed subjects list | Add the exact subject to the WI Provider in CertForge Settings → Workload Identity |
 
 ---
 
@@ -470,12 +570,19 @@ Common causes:
 
 ### CertForgeIssuerSpec (shared by `CertForgeIssuer` and `CertForgeClusterIssuer`)
 
+Exactly one of `authSecretRef` or `workloadIdentity` must be set. Specifying both or neither
+results in the issuer being set to `Ready=False` with reason `InvalidSpec`.
+
 | Field | Required | Description |
 |-------|----------|-------------|
 | `url` | Yes | Base URL of the CertForge server. Determines the data region. |
-| `authSecretRef.name` | Yes | Name of the Secret containing a `token` key with the API bearer token. |
+| `authSecretRef.name` | No* | Name of the Secret containing a `token` key with the API bearer token. Mutually exclusive with `workloadIdentity`. |
+| `workloadIdentity.audience` | No* | Audience for the projected ServiceAccount token. Must match the Workload Identity Provider configured in CertForge. Mutually exclusive with `authSecretRef`. |
+| `workloadIdentity.tokenFile` | No | Path to the token file inside the pod. Defaults to `/var/run/secrets/certforge/token`. |
 | `issuanceProfileID` | No | Default issuance profile ID for all certs from this issuer. Overrides the DTP default. Can be overridden per Certificate via the `certforge.io/issuance-profile` annotation. |
 | `secretNamespace` | No | Namespace to read the credentials Secret from (`CertForgeClusterIssuer` only). Defaults to `certforge-system`. |
+
+\* One of `authSecretRef` or `workloadIdentity` is required.
 
 ### Annotations
 
