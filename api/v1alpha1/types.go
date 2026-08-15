@@ -6,6 +6,36 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// ─── WorkloadIdentitySpec ─────────────────────────────────────────────────────
+
+// WorkloadIdentitySpec configures token-file-based authentication using a
+// Kubernetes projected ServiceAccount token. The kubelet automatically writes
+// and rotates the token at the specified path. No Secret is required.
+//
+// To use workload identity:
+//  1. Omit authSecretRef from the issuer spec.
+//  2. Set workloadIdentity with the audience and tokenFile path.
+//  3. Configure a matching Workload Identity Provider in the CertForge UI
+//     (Settings → Workload Identity) with the same audience and the cluster's
+//     OIDC issuer URL.
+//
+// The Helm chart adds the required projected ServiceAccount volume and mount
+// when workloadIdentity.enabled=true; no manual volume wiring is needed.
+type WorkloadIdentitySpec struct {
+	// Audience is the intended audience for the projected ServiceAccount token.
+	// Must match the audience configured in the CertForge Workload Identity Provider.
+	// Use your CertForge server URL, e.g. https://app.certgovernance.app.
+	// +kubebuilder:validation:Required
+	Audience string `json:"audience"`
+
+	// TokenFile is the path to the projected ServiceAccount token file inside
+	// the controller pod. Defaults to /var/run/secrets/certforge/token.
+	// The Helm chart mounts the token here automatically.
+	// +optional
+	// +kubebuilder:default="/var/run/secrets/certforge/token"
+	TokenFile string `json:"tokenFile,omitempty"`
+}
+
 // ─── CertForgeIssuer ─────────────────────────────────────────────────────────
 
 // CertForgeIssuer is a namespace-scoped issuer that talks to a CertForge server.
@@ -23,6 +53,11 @@ type CertForgeIssuer struct {
 }
 
 // CertForgeIssuerSpec defines the desired state of CertForgeIssuer.
+//
+// Exactly one of authSecretRef or workloadIdentity must be set to provide
+// credentials. authSecretRef uses a static long-lived token stored in a
+// Kubernetes Secret. workloadIdentity uses a short-lived projected
+// ServiceAccount token — no Secret required.
 type CertForgeIssuerSpec struct {
 	// URL is the base URL of the CertForge server.
 	// Use https://app.certgovernance.app for US East or https://eu.certgovernance.app for EU West.
@@ -33,8 +68,16 @@ type CertForgeIssuerSpec struct {
 	// AuthSecretRef references a Secret containing a "token" key with the CertForge API bearer token.
 	// For CertForgeIssuer the Secret must be in the same namespace as the issuer.
 	// For CertForgeClusterIssuer the Secret is read from SecretNamespace (default: certforge-system).
-	// +kubebuilder:validation:Required
-	AuthSecretRef corev1.LocalObjectReference `json:"authSecretRef"`
+	// Mutually exclusive with workloadIdentity; exactly one must be set.
+	// +optional
+	AuthSecretRef *corev1.LocalObjectReference `json:"authSecretRef,omitempty"`
+
+	// WorkloadIdentity configures authentication using a projected ServiceAccount token.
+	// The kubelet rotates the token automatically — no long-lived Secret is required.
+	// Requires a matching Workload Identity Provider configured in the CertForge UI.
+	// Mutually exclusive with authSecretRef; exactly one must be set.
+	// +optional
+	WorkloadIdentity *WorkloadIdentitySpec `json:"workloadIdentity,omitempty"`
 
 	// IssuanceProfileID is the optional default issuance profile ID for certificate requests
 	// routed through this issuer. Overrides the DTP default. Can be overridden per Certificate
@@ -107,8 +150,20 @@ func (in *CertForgeIssuer) DeepCopyInto(out *CertForgeIssuer) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
 	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *CertForgeIssuerSpec) DeepCopyInto(out *CertForgeIssuerSpec) {
+	*out = *in
+	if in.AuthSecretRef != nil {
+		ref := *in.AuthSecretRef
+		out.AuthSecretRef = &ref
+	}
+	if in.WorkloadIdentity != nil {
+		wi := *in.WorkloadIdentity
+		out.WorkloadIdentity = &wi
+	}
 }
 
 func (in *CertForgeIssuerList) DeepCopyObject() runtime.Object {
@@ -137,7 +192,7 @@ func (in *CertForgeClusterIssuer) DeepCopyInto(out *CertForgeClusterIssuer) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
 	in.Status.DeepCopyInto(&out.Status)
 }
 

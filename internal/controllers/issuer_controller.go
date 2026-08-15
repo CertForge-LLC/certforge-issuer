@@ -31,46 +31,78 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Resolve credentials from the referenced Secret.
-	// For ClusterIssuer: use SecretNamespace from spec if set, else default to "certforge-system".
-	secretNS := req.Namespace
-	if r.Kind == "CertForgeClusterIssuer" {
-		secretNS = "certforge-system"
-		if spec.SecretNamespace != "" {
-			secretNS = spec.SecretNamespace
+	// Resolve credentials: either a static token from a Secret or a dynamic
+	// projected ServiceAccount token read from a file (workload identity).
+	// Exactly one of spec.AuthSecretRef and spec.WorkloadIdentity must be set.
+	var ts TokenSource
+
+	switch {
+	case spec.AuthSecretRef != nil && spec.WorkloadIdentity != nil:
+		meta.SetStatusCondition(statusConditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "InvalidSpec",
+			Message: "spec.authSecretRef and spec.workloadIdentity are mutually exclusive — set exactly one",
+		})
+		return ctrl.Result{}, updateStatus(ctx)
+
+	case spec.AuthSecretRef == nil && spec.WorkloadIdentity == nil:
+		meta.SetStatusCondition(statusConditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "InvalidSpec",
+			Message: "one of spec.authSecretRef or spec.workloadIdentity must be set",
+		})
+		return ctrl.Result{}, updateStatus(ctx)
+
+	case spec.AuthSecretRef != nil:
+		// Static token path: read from Secret.
+		secretNS := req.Namespace
+		if r.Kind == "CertForgeClusterIssuer" {
+			secretNS = "certforge-system"
+			if spec.SecretNamespace != "" {
+				secretNS = spec.SecretNamespace
+			}
 		}
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
+			logger.Error(err, "credentials secret not found", "secret", spec.AuthSecretRef.Name)
+			meta.SetStatusCondition(statusConditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "SecretNotFound",
+				Message: fmt.Sprintf("Secret %s/%s not found: %v", secretNS, spec.AuthSecretRef.Name, err),
+			})
+			return ctrl.Result{}, updateStatus(ctx)
+		}
+		token := string(secret.Data["token"])
+		if token == "" {
+			meta.SetStatusCondition(statusConditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InvalidSecret",
+				Message: fmt.Sprintf("Secret %s/%s missing 'token' key", secretNS, spec.AuthSecretRef.Name),
+			})
+			return ctrl.Result{}, updateStatus(ctx)
+		}
+		ts = StaticTokenSource{token: token}
+
+	case spec.WorkloadIdentity != nil:
+		// Workload identity path: read short-lived SA token from file.
+		tokenFile := spec.WorkloadIdentity.TokenFile
+		if tokenFile == "" {
+			tokenFile = "/var/run/secrets/certforge/token"
+		}
+		ts = FileTokenSource{path: tokenFile}
 	}
 
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
-		logger.Error(err, "credentials secret not found", "secret", spec.AuthSecretRef.Name)
-		meta.SetStatusCondition(statusConditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionFalse,
-			Reason:  "SecretNotFound",
-			Message: fmt.Sprintf("Secret %s/%s not found: %v", secretNS, spec.AuthSecretRef.Name, err),
-		})
-		return ctrl.Result{}, updateStatus(ctx)
-	}
-
-	token := string(secret.Data["token"])
-	if token == "" {
-		meta.SetStatusCondition(statusConditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionFalse,
-			Reason:  "InvalidSecret",
-			Message: fmt.Sprintf("Secret %s/%s missing 'token' key", secretNS, spec.AuthSecretRef.Name),
-		})
-		return ctrl.Result{}, updateStatus(ctx)
-	}
-
-	// Perform a live authenticated ping to verify the token is accepted by CertForge.
-	// This catches bad tokens, expired tokens, and connectivity failures at Issuer
-	// creation time rather than silently showing Ready=True until the first certificate
-	// request fails. The ping uses a short timeout so it never blocks reconciliation.
+	// Perform a live authenticated ping to verify the credentials are accepted
+	// by CertForge. This catches bad tokens, expired tokens, and connectivity
+	// failures at Issuer creation time rather than silently showing Ready=True
+	// until the first certificate request fails.
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := newClient(spec.URL, token).Ping(pingCtx); err != nil {
+	if err := newClientWithTokenSource(spec.URL, ts).Ping(pingCtx); err != nil {
 		logger.Error(err, "CertForge ping failed", "url", spec.URL)
 		meta.SetStatusCondition(statusConditions, metav1.Condition{
 			Type:    "Ready",

@@ -126,7 +126,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// Resolve the issuer and load credentials.
-	cfURL, token, issuerProfileID, err := r.resolveIssuer(ctx, cr)
+	cfURL, ts, issuerProfileID, err := r.resolveIssuer(ctx, cr)
 	if err != nil {
 		logger.Error(err, "failed to resolve issuer")
 		setCondition(cr, cmapi.CertificateRequestConditionReady,
@@ -143,7 +143,7 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		issuanceProfileID = issuerProfileID
 	}
 
-	cf := newClient(cfURL, token)
+	cf := newClientWithTokenSource(cfURL, ts)
 
 	// Check if we already submitted this request (stored in annotation).
 	requestID := cr.Annotations[annotationRequestID]
@@ -262,53 +262,72 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 }
 
-// resolveIssuer finds the Issuer or ClusterIssuer and returns the CertForge URL, token,
-// default issuance profile ID, and any error.
-func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cmapi.CertificateRequest) (string, string, string, error) {
+// resolveIssuer finds the Issuer or ClusterIssuer, checks it is Ready, and
+// returns the CertForge URL, a TokenSource, the default issuance profile ID,
+// and any error. The TokenSource is either Secret-backed (static token) or
+// file-backed (projected ServiceAccount token that rotates hourly).
+func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cmapi.CertificateRequest) (string, TokenSource, string, error) {
 	var spec certforgev1alpha1.CertForgeIssuerSpec
 
 	switch cr.Spec.IssuerRef.Kind {
 	case "CertForgeClusterIssuer", "":
 		obj := &certforgev1alpha1.CertForgeClusterIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name}, obj); err != nil {
-			return "", "", "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+			return "", nil, "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
 		if !apimeta.IsStatusConditionTrue(obj.Status.Conditions, "Ready") {
-			return "", "", "", fmt.Errorf("ClusterIssuer %q is not ready", cr.Spec.IssuerRef.Name)
+			return "", nil, "", fmt.Errorf("ClusterIssuer %q is not ready", cr.Spec.IssuerRef.Name)
 		}
 		spec = obj.Spec
 	case "CertForgeIssuer":
 		obj := &certforgev1alpha1.CertForgeIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name, Namespace: cr.Namespace}, obj); err != nil {
-			return "", "", "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+			return "", nil, "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
 		if !apimeta.IsStatusConditionTrue(obj.Status.Conditions, "Ready") {
-			return "", "", "", fmt.Errorf("Issuer %q is not ready", cr.Spec.IssuerRef.Name)
+			return "", nil, "", fmt.Errorf("Issuer %q is not ready", cr.Spec.IssuerRef.Name)
 		}
 		spec = obj.Spec
 	default:
-		return "", "", "", fmt.Errorf("unknown issuer kind %q", cr.Spec.IssuerRef.Kind)
+		return "", nil, "", fmt.Errorf("unknown issuer kind %q", cr.Spec.IssuerRef.Kind)
 	}
 
-	// Resolve the namespace for the credentials Secret.
-	// For ClusterIssuer: use SecretNamespace if set, else default to "certforge-system".
-	// For namespace-scoped Issuer: use the issuer's own namespace.
-	secretNS := cr.Namespace
-	if cr.Spec.IssuerRef.Kind == "CertForgeClusterIssuer" || cr.Spec.IssuerRef.Kind == "" {
-		secretNS = "certforge-system"
-		if spec.SecretNamespace != "" {
-			secretNS = spec.SecretNamespace
+	// Resolve the token source: Secret-backed (static) or file-backed (workload identity).
+	var ts TokenSource
+	switch {
+	case spec.WorkloadIdentity != nil:
+		tokenFile := spec.WorkloadIdentity.TokenFile
+		if tokenFile == "" {
+			tokenFile = "/var/run/secrets/certforge/token"
 		}
+		ts = FileTokenSource{path: tokenFile}
+
+	case spec.AuthSecretRef != nil:
+		// Resolve the namespace for the credentials Secret.
+		// For ClusterIssuer: use SecretNamespace if set, else default to "certforge-system".
+		// For namespace-scoped Issuer: use the CertificateRequest's own namespace.
+		secretNS := cr.Namespace
+		if cr.Spec.IssuerRef.Kind == "CertForgeClusterIssuer" || cr.Spec.IssuerRef.Kind == "" {
+			secretNS = "certforge-system"
+			if spec.SecretNamespace != "" {
+				secretNS = spec.SecretNamespace
+			}
+		}
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
+			return "", nil, "", fmt.Errorf("credentials secret %q not found: %w", spec.AuthSecretRef.Name, err)
+		}
+		token := string(secret.Data["token"])
+		if token == "" {
+			return "", nil, "", fmt.Errorf("secret %q has no 'token' key", spec.AuthSecretRef.Name)
+		}
+		ts = StaticTokenSource{token: token}
+
+	default:
+		return "", nil, "", fmt.Errorf("issuer has no credential source (set authSecretRef or workloadIdentity)")
 	}
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
-		return "", "", "", fmt.Errorf("credentials secret %q not found: %w", spec.AuthSecretRef.Name, err)
-	}
-	token := string(secret.Data["token"])
-	if token == "" {
-		return "", "", "", fmt.Errorf("secret %q has no 'token' key", spec.AuthSecretRef.Name)
-	}
-	return spec.URL, token, spec.IssuanceProfileID, nil
+
+	return spec.URL, ts, spec.IssuanceProfileID, nil
 }
 
 // setCondition mutates cr.Status.Conditions in memory — callers own the status write.

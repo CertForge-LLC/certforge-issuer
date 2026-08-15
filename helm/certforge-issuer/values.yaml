@@ -33,6 +33,31 @@ resources:
     cpu: 10m
     memory: 32Mi
 
+# Workload Identity: authenticate using a projected ServiceAccount token instead
+# of a long-lived API key stored in a Secret. No Secret is needed in the cluster.
+#
+# Requires:
+#   1. A Workload Identity Provider configured in CertForge UI
+#      (Settings → Workload Identity) with this cluster's OIDC issuer URL and
+#      the audience set below.
+#   2. The CertForgeClusterIssuer or CertForgeIssuer spec must use
+#      workloadIdentity instead of authSecretRef.
+#
+# When enabled, the Helm chart adds a projected ServiceAccount volume that
+# mounts a short-lived OIDC token at /var/run/secrets/certforge/token.
+# The kubelet rotates the token automatically (default: every 1 hour).
+workloadIdentity:
+  enabled: false
+  # audience must match the audience configured in the CertForge Workload
+  # Identity Provider. Use your CertForge server URL.
+  audience: "https://app.certgovernance.app"
+  # expirationSeconds controls how long each token is valid before the kubelet
+  # replaces it. 3600 (1 hour) is a reasonable minimum for most deployments.
+  expirationSeconds: 3600
+  # tokenFile is where the token is mounted inside the pod. Must match the
+  # tokenFile in the CertForgeClusterIssuer spec (default matches).
+  tokenFile: "/var/run/secrets/certforge/token"
+
 # NetworkPolicy: restrict pod ingress/egress to only what the controller needs.
 # Disabled by default — enable in security-sensitive clusters.
 # When enabled the policy allows:

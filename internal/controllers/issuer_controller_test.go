@@ -77,7 +77,7 @@ func TestResolveIssuer_ClusterIssuer_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "certforge"},
 		Spec: certforgev1alpha1.CertForgeIssuerSpec{
 			URL:               "https://app.certgovernance.app",
-			AuthSecretRef:     corev1.LocalObjectReference{Name: "certforge-credentials"},
+			AuthSecretRef:     &corev1.LocalObjectReference{Name: "certforge-credentials"},
 			IssuanceProfileID: "profile-abc",
 		},
 		Status: certforgev1alpha1.CertForgeIssuerStatus{Conditions: issuerReadyConditions()},
@@ -87,15 +87,19 @@ func TestResolveIssuer_ClusterIssuer_HappyPath(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer, secret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	url, token, profileID, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	url, ts, profileID, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if url != "https://app.certgovernance.app" {
 		t.Errorf("url = %q, want https://app.certgovernance.app", url)
 	}
-	if token != "my-api-token" {
-		t.Errorf("token = %q, want my-api-token", token)
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("ts.Token() unexpected error: %v", err)
+	}
+	if tok != "my-api-token" {
+		t.Errorf("token = %q, want my-api-token", tok)
 	}
 	if profileID != "profile-abc" {
 		t.Errorf("profileID = %q, want profile-abc", profileID)
@@ -108,7 +112,7 @@ func TestResolveIssuer_ClusterIssuer_NotReady(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "certforge"},
 		Spec: certforgev1alpha1.CertForgeIssuerSpec{
 			URL:           "https://app.certgovernance.app",
-			AuthSecretRef: corev1.LocalObjectReference{Name: "certforge-credentials"},
+			AuthSecretRef: &corev1.LocalObjectReference{Name: "certforge-credentials"},
 		},
 		Status: certforgev1alpha1.CertForgeIssuerStatus{Conditions: issuerNotReadyConditions()},
 	}
@@ -145,7 +149,7 @@ func TestResolveIssuer_ClusterIssuer_SecretMissing(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "certforge"},
 		Spec: certforgev1alpha1.CertForgeIssuerSpec{
 			URL:           "https://app.certgovernance.app",
-			AuthSecretRef: corev1.LocalObjectReference{Name: "certforge-credentials"},
+			AuthSecretRef: &corev1.LocalObjectReference{Name: "certforge-credentials"},
 		},
 		Status: certforgev1alpha1.CertForgeIssuerStatus{Conditions: issuerReadyConditions()},
 	}
@@ -169,7 +173,7 @@ func TestResolveIssuer_ClusterIssuer_EmptyToken(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "certforge"},
 		Spec: certforgev1alpha1.CertForgeIssuerSpec{
 			URL:           "https://app.certgovernance.app",
-			AuthSecretRef: corev1.LocalObjectReference{Name: "certforge-credentials"},
+			AuthSecretRef: &corev1.LocalObjectReference{Name: "certforge-credentials"},
 		},
 		Status: certforgev1alpha1.CertForgeIssuerStatus{Conditions: issuerReadyConditions()},
 	}
@@ -196,7 +200,7 @@ func TestResolveIssuer_ClusterIssuer_CustomSecretNamespace(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "certforge"},
 		Spec: certforgev1alpha1.CertForgeIssuerSpec{
 			URL:             "https://app.certgovernance.app",
-			AuthSecretRef:   corev1.LocalObjectReference{Name: "certforge-credentials"},
+			AuthSecretRef:   &corev1.LocalObjectReference{Name: "certforge-credentials"},
 			SecretNamespace: "vault-ns", // non-default namespace
 		},
 		Status: certforgev1alpha1.CertForgeIssuerStatus{Conditions: issuerReadyConditions()},
@@ -207,12 +211,16 @@ func TestResolveIssuer_ClusterIssuer_CustomSecretNamespace(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer, secret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, token, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	_, ts, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != "vault-token" {
-		t.Errorf("token = %q, want vault-token (from custom SecretNamespace)", token)
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("ts.Token() unexpected error: %v", err)
+	}
+	if tok != "vault-token" {
+		t.Errorf("token = %q, want vault-token (from custom SecretNamespace)", tok)
 	}
 }
 
@@ -224,7 +232,7 @@ func TestResolveIssuer_NamespacedIssuer_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "certforge", Namespace: "team-ns"},
 		Spec: certforgev1alpha1.CertForgeIssuerSpec{
 			URL:           "https://app.certgovernance.app",
-			AuthSecretRef: corev1.LocalObjectReference{Name: "certforge-credentials"},
+			AuthSecretRef: &corev1.LocalObjectReference{Name: "certforge-credentials"},
 		},
 		Status: certforgev1alpha1.CertForgeIssuerStatus{Conditions: issuerReadyConditions()},
 	}
@@ -234,12 +242,16 @@ func TestResolveIssuer_NamespacedIssuer_HappyPath(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(nsIssuer, secret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, token, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeIssuer", "team-ns"))
+	_, ts, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeIssuer", "team-ns"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != "team-token" {
-		t.Errorf("token = %q, want team-token", token)
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("ts.Token() unexpected error: %v", err)
+	}
+	if tok != "team-token" {
+		t.Errorf("token = %q, want team-token", tok)
 	}
 }
 
