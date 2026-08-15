@@ -1,6 +1,6 @@
 module github.com/certforge/certforge-issuer
 
-go 1.25.13
+go 1.26.6
 
 require (
 	github.com/cert-manager/cert-manager v1.16.3
