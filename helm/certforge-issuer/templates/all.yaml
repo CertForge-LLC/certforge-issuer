@@ -147,3 +147,26 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
       terminationGracePeriodSeconds: 10
+---
+# Service exposes the controller's metrics and health ports so that
+# Prometheus can scrape /metrics via a ServiceMonitor, and kubectl port-forward
+# works without targeting a specific pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: certforge-issuer-metrics
+  namespace: certforge-system
+  labels:
+    app: certforge-issuer
+spec:
+  selector:
+    app: certforge-issuer
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+    - name: health
+      port: 8081
+      targetPort: health
+      protocol: TCP

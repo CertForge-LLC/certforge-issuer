@@ -1,0 +1,35 @@
+{{- if .Values.serviceMonitor.enabled }}
+# ServiceMonitor tells Prometheus Operator to scrape the certforge-issuer
+# controller's /metrics endpoint. Requires prometheus-operator or
+# kube-prometheus-stack to be installed in the cluster.
+#
+# If your Prometheus Operator uses a label selector (common with
+# kube-prometheus-stack), add the required labels under
+# serviceMonitor.additionalLabels. For example:
+#   serviceMonitor:
+#     enabled: true
+#     additionalLabels:
+#       release: prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: certforge-issuer
+  namespace: certforge-system
+  labels:
+    app: certforge-issuer
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: certforge-issuer
+  namespaceSelector:
+    matchNames:
+      - certforge-system
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+{{- end }}

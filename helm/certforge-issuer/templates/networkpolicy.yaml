@@ -1,0 +1,55 @@
+{{- if .Values.networkPolicy.enabled }}
+# NetworkPolicy restricts the certforge-issuer controller pod to only the
+# traffic it actually needs. Enable with networkPolicy.enabled=true.
+#
+# Egress destinations:
+#   - DNS (UDP/TCP 53):  hostname resolution for CertForge API and kube-apiserver
+#   - Port 443:          Kubernetes API server (most managed clusters) + CertForge API
+#   - Port 6443:         Kubernetes API server (kubeadm clusters, set by kubeApiServerPort)
+#
+# If your CNI does not support NetworkPolicy (e.g. Flannel without a policy
+# engine), this object is silently ignored — install Calico, Cilium, or a
+# similar policy-enforcing CNI first.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: certforge-issuer
+  namespace: certforge-system
+  labels:
+    app: certforge-issuer
+spec:
+  podSelector:
+    matchLabels:
+      app: certforge-issuer
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Kubelet liveness/readiness probes → health port (8081).
+    # Prometheus scrape → metrics port (8080).
+    # Allowing from 0.0.0.0/0 because kubelets can come from any node CIDR;
+    # tighten with a namespaceSelector for your monitoring namespace if needed.
+    - ports:
+        - port: 8081
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+
+  egress:
+    # DNS: required for resolving CertForge hostnames and kube-apiserver FQDN.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    # Kubernetes API server + CertForge HTTPS API.
+    # Port 443:  used by managed clusters (EKS, GKE, AKS) and CertForge API.
+    # Port 6443: used by kubeadm/kind clusters. Override with kubeApiServerPort.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: {{ .Values.networkPolicy.kubeApiServerPort }}
+          protocol: TCP
+{{- end }}

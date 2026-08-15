@@ -32,3 +32,24 @@ resources:
   requests:
     cpu: 10m
     memory: 32Mi
+
+# NetworkPolicy: restrict pod ingress/egress to only what the controller needs.
+# Disabled by default — enable in security-sensitive clusters.
+# When enabled the policy allows:
+#   Ingress: health probe (8081) and metrics scrape (8080) ports
+#   Egress:  DNS (53 UDP/TCP), Kubernetes API (443 / 6443), CertForge API (443)
+# Adjust kubeApiServerPort if your control plane uses a non-standard port.
+networkPolicy:
+  enabled: false
+  kubeApiServerPort: 6443   # set to 443 for managed clusters (EKS, GKE, AKS)
+
+# ServiceMonitor: Prometheus Operator integration.
+# Requires prometheus-operator or kube-prometheus-stack in the cluster.
+# Creates a ServiceMonitor that scrapes /metrics on port 8080.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  # Additional labels required by your Prometheus Operator instance's label selector.
+  # Example for kube-prometheus-stack: additionalLabels: {release: prometheus}
+  additionalLabels: {}
