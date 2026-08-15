@@ -282,16 +282,38 @@ kubectl apply -f https://raw.githubusercontent.com/CertForge-LLC/certforge-issue
 
 ![cert-manager + certforge-issuer architecture](docs/images/k8s-architecture.png)
 
-1. cert-manager creates a `CertificateRequest` with `issuerRef.group: certforge.io`
-2. The controller POSTs the CSR to `POST /api/v1/certificate-requests`
+1. cert-manager generates a private key inside the cluster and creates a `CertificateRequest`
+   containing the CSR (public key + subject) with `issuerRef.group: certforge.io`
+2. The controller POSTs the CSR to `POST /api/v1/certificate-requests` — the private key is
+   never included in this request and never sent to CertForge
 3. CertForge checks the request against your Domain Trust Profiles
    - If no DTP covers the requested domains, the `CertificateRequest` is marked `InvalidRequest`
      and no retry occurs — add the domain to a DTP in CertForge to resolve
 4. If auto-approval is configured, the certificate is issued immediately
 5. If manual approval is required, the request waits in CertForge's approval queue
 6. The controller polls every 15 seconds until issued or denied
-7. On issuance, the signed certificate is written back to the `CertificateRequest`
-8. cert-manager stores the key + certificate as a Kubernetes Secret
+7. On issuance, CertForge returns the signed certificate (PEM); the controller writes it back
+   to the `CertificateRequest`
+8. cert-manager assembles the `tls.key` + `tls.crt` Kubernetes Secret in the workload namespace
+
+### Private Key Handling
+
+**Private keys never leave the cluster.** cert-manager generates the key pair locally and retains
+the private key. CertForge receives only the CSR — public key material and subject attributes.
+
+This is the same model as cert-manager's built-in issuers:
+
+| Issuer | Who generates the private key? | Key leaves the cluster? |
+|--------|-------------------------------|-------------------------|
+| certforge-issuer | cert-manager | **No** |
+| ACME (Let's Encrypt) | cert-manager | No |
+| cert-manager CA | cert-manager | No |
+| SelfSigned | cert-manager | No |
+
+Private keys are stored as Kubernetes Secrets (`type: kubernetes.io/tls`). Apply standard
+Kubernetes Secret hygiene: enable encryption-at-rest for etcd, restrict Secret access via RBAC,
+and consider using an external secret store (e.g. Vault, ASM) if your policy requires keys to
+never touch etcd.
 
 ### Troubleshooting
 
