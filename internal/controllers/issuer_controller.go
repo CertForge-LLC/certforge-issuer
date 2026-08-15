@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -61,6 +62,23 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			Message: fmt.Sprintf("Secret %s/%s missing 'token' key", secretNS, spec.AuthSecretRef.Name),
 		})
 		return ctrl.Result{}, updateStatus(ctx)
+	}
+
+	// Perform a live authenticated ping to verify the token is accepted by CertForge.
+	// This catches bad tokens, expired tokens, and connectivity failures at Issuer
+	// creation time rather than silently showing Ready=True until the first certificate
+	// request fails. The ping uses a short timeout so it never blocks reconciliation.
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := newClient(spec.URL, token).Ping(pingCtx); err != nil {
+		logger.Error(err, "CertForge ping failed", "url", spec.URL)
+		meta.SetStatusCondition(statusConditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "PingFailed",
+			Message: err.Error(),
+		})
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, updateStatus(ctx)
 	}
 
 	meta.SetStatusCondition(statusConditions, metav1.Condition{

@@ -99,6 +99,35 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 	return out.ID, nil
 }
 
+// Ping makes a lightweight authenticated GET to /api/v1/ping to verify that the
+// token is valid and the CertForge server is reachable. It returns nil on success,
+// or a descriptive error that distinguishes auth failures from connectivity failures.
+func (c *certforgeClient) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/ping", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("cannot reach CertForge at %s: %w", c.baseURL, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body) // drain to allow connection reuse
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusUnauthorized:
+		return fmt.Errorf("token rejected by CertForge (401 Unauthorized) — check the token in your credentials Secret")
+	case http.StatusForbidden:
+		return fmt.Errorf("token lacks required scope (403 Forbidden) — token needs read and enroll scopes")
+	default:
+		return fmt.Errorf("unexpected response from CertForge ping: HTTP %d", resp.StatusCode)
+	}
+}
+
 // Poll checks the status of a previously submitted request.
 func (c *certforgeClient) Poll(ctx context.Context, id string) (certResponse, error) {
 	if id == "" {

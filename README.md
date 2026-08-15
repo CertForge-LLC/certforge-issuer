@@ -305,7 +305,144 @@ kubectl describe certificaterequest <name> -n <namespace>
 |-----------|--------|-------|
 | `InvalidRequest=True` | `PolicyViolation` | Domain not covered by any CertForge DTP, or wildcard not permitted |
 | `Denied=True` | `Denied` | Request was manually denied in the CertForge approval queue |
+| `Denied=True` | `PreviouslyDenied` | A previous request for this Certificate was denied; cert-manager created a retry CR |
 | `Ready=False` | `Pending` | Waiting for approval in CertForge, or transient connectivity issue |
+| `Ready=False` | `IssuerNotReady` | The Issuer/ClusterIssuer is not Ready — see issuer status below |
+
+Check the issuer status:
+
+```bash
+kubectl get certforgeissuer -n <namespace>          # namespace-scoped
+kubectl get certforgeclusterissuer                  # cluster-scoped
+kubectl describe certforgeclusterissuer certforge   # full status + conditions
+```
+
+## Failure Modes & Operator Runbook
+
+### Issuer shows Ready=False
+
+**Reason: `PingFailed` — "token rejected by CertForge (401 Unauthorized)"**
+
+The token in the credentials Secret is invalid, expired, or was revoked.
+
+```bash
+# Identify the Secret name
+kubectl get certforgeclusterissuer certforge -o jsonpath='{.spec.authSecretRef.name}'
+
+# Replace the token (certforge-system namespace for ClusterIssuer)
+kubectl create secret generic certforge-credentials \
+  --namespace certforge-system \
+  --from-literal=token=<new-token> \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The issuer reconciler retries every 30 seconds; Ready=True should appear within a minute.
+
+---
+
+**Reason: `PingFailed` — "token lacks required scope (403 Forbidden)"**
+
+The token exists and is valid, but was created without the `read` scope. Issuer tokens need both `enroll` and `read`.
+
+Go to **CertForge → Settings → API Keys**, revoke the existing token, and create a new one with `enroll + read` scopes. Update the Secret as shown above.
+
+---
+
+**Reason: `PingFailed` — "cannot reach CertForge at https://..."**
+
+The controller pod cannot reach the CertForge API. Common causes:
+
+1. **Network policy blocking egress** — the controller needs outbound HTTPS (port 443) to `app.certgovernance.app` (US) or `eu.certgovernance.app` (EU).
+2. **Wrong URL in spec** — verify `spec.url` matches the region your token was issued for.
+3. **DNS resolution failure** — check that cluster DNS can resolve the hostname.
+
+```bash
+# Confirm the controller is running
+kubectl get pods -n certforge-system
+
+# Check controller logs for detail
+kubectl logs -n certforge-system deploy/certforge-issuer-controller-manager
+
+# Test egress from inside the cluster (if you have a debug pod)
+kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+  curl -sI https://app.certgovernance.app/api/v1/ping \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+**Reason: `SecretNotFound`**
+
+The credentials Secret doesn't exist in the expected namespace.
+
+- For `CertForgeClusterIssuer`: Secret must be in `certforge-system` (or the namespace set in `secretNamespace`).
+- For `CertForgeIssuer`: Secret must be in the same namespace as the issuer.
+
+```bash
+kubectl create secret generic certforge-credentials \
+  --namespace certforge-system \
+  --from-literal=token=<your-api-token>
+```
+
+---
+
+### Certificate stuck in Pending — approval queue
+
+When a Domain Trust Profile requires manual approval, `CertificateRequest` objects stay in `Ready=False / Pending` until a CertForge approver acts. This is expected behavior, not an error.
+
+```bash
+# See how long the request has been waiting
+kubectl describe certificaterequest <name> -n <namespace>
+# The Ready condition message shows "submitted Xh Ym ago"
+```
+
+Approvers action requests in the **CertForge → Approvals** queue. If a request is urgent, an admin can approve it there directly.
+
+---
+
+### Certificate stuck in Pending — no matching DTP
+
+```
+Condition: InvalidRequest=True
+Reason: PolicyViolation
+Message: Domain not covered by any CertForge DTP ...
+```
+
+The requested domain (SAN) is not covered by any Domain Trust Profile for your org. Options:
+
+1. Add the domain to an existing DTP in CertForge.
+2. Create a new DTP that covers the domain pattern.
+3. If this cert should not be issued, the `InvalidRequest` condition is terminal — no retry will occur.
+
+---
+
+### Human-denied request keeps generating new approval notifications
+
+cert-manager's Certificate controller creates new `CertificateRequest` objects on an exponential backoff (≈1h, 2h, …) even after a request is `Denied=True`. The issuer detects this via the `certforge.io/denied-at` annotation on the parent Certificate and denies retry CRs immediately without re-submitting to CertForge.
+
+If you are seeing repeated approval notifications, the parent Certificate may have been recreated (which loses the annotation). **Breaking the cycle:**
+
+```bash
+# Option 1: delete the Certificate (and let cert-manager recreate it fresh)
+kubectl delete certificate <name> -n <namespace>
+
+# Option 2: if the cert should never be issued, delete the Certificate
+# and remove the workload's cert-manager annotations/volume mounts
+```
+
+---
+
+### Controller pod crashlooping or not starting
+
+```bash
+kubectl describe pod -n certforge-system -l app=certforge-issuer-controller-manager
+kubectl logs -n certforge-system deploy/certforge-issuer-controller-manager --previous
+```
+
+Common causes:
+- **CRDs not installed** — run `kubectl apply -f config/crd/certforge-issuer.yaml` before deploying the controller.
+- **RBAC missing** — run `kubectl apply -f config/rbac/rbac.yaml`.
+- **Leader election conflict** — if two controller instances are running in the same namespace, one will fail to acquire the leader lease. Ensure only one Helm release is installed per cluster.
 
 ## Spec Reference
 
