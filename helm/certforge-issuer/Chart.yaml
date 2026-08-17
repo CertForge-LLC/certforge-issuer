@@ -3,7 +3,7 @@ name: certforge-issuer
 description: cert-manager external issuer for CertForge certificate governance
 type: application
 version: 0.2.3
-appVersion: "0.2.1"
+appVersion: "0.2.3"
 keywords:
   - cert-manager
   - certificates
