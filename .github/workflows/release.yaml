@@ -28,6 +28,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── Multi-arch build setup ───────────────────────────────────────────────
+      # QEMU lets the builder cross-compile linux/arm64 (Graviton, AKS Arm64)
+      # on an x86 runner without needing a native ARM runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@aa33708b10e362ff993539393ff100fa93ed6a27 # v3
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
@@ -44,8 +53,12 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # cache-from/to speeds up subsequent arm64 cross-compiles significantly
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # ── Cosign: keyless image signing ────────────────────────────────────────
       # Signs the image digest using GitHub Actions OIDC identity (no long-lived keys).

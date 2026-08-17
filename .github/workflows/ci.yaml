@@ -20,8 +20,17 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Test
-        run: go test ./...
+      - name: Test with coverage
+        run: go test ./internal/... -coverprofile=cover.out
+
+      - name: Coverage gate (≥80%)
+        # Fail the build if internal package coverage drops below 80%.
+        # Only internal/ is measured — api/ is generated code and cmd/ is a
+        # one-line main, neither of which is meaningfully unit-testable.
+        run: |
+          pct=$(go tool cover -func=cover.out | awk '/^total/ { gsub(/%/,""); print $3 }')
+          echo "Coverage: ${pct}%"
+          awk "BEGIN { if (${pct}+0 < 80) { print \"ERROR: coverage ${pct}% is below the 80% threshold\"; exit 1 } }"
 
       - name: Vet
         run: go vet ./...
@@ -40,3 +49,23 @@ jobs:
           scanners: vuln
           severity: HIGH,CRITICAL
           exit-code: '1'
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+
+      - name: Lint Helm chart
+        run: helm lint helm/certforge-issuer
+
+      - name: Template dry-run
+        # Renders the chart with a synthetic image tag to catch template errors
+        # before a release tag is pushed.
+        run: |
+          helm template certforge-issuer helm/certforge-issuer \
+            --set image.tag=ci-test \
+            --debug \
+            > /dev/null

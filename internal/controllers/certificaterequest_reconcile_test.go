@@ -508,6 +508,60 @@ func TestResolveIssuer_ClusterIssuer_WorkloadIdentity(t *testing.T) {
 	}
 }
 
+// ── stampCertificateDenied edge cases ─────────────────────────────────────────
+
+// TestReconcile_StampDenied_NoCertObject: when CertForge rejects a CR whose
+// parent Certificate has already been GC'd (not present in the store),
+// stampCertificateDenied must silently log and return — it must NOT propagate
+// the not-found error. The CR's Denied=True condition is the authoritative signal.
+func TestReconcile_StampDenied_NoCertObject(t *testing.T) {
+	srv := newCertForgeServer(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(certResponse{ID: "req-004", Status: "pending"})
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(certResponse{ID: "req-004", Status: "rejected", Reason: "policy"})
+		},
+	)
+	defer srv.Close()
+
+	// CR has the certificate-name label, but the parent Certificate is absent.
+	cr := newCRForIssuer("my-cr", "default", map[string]string{
+		"cert-manager.io/certificate-name": "my-cert",
+	})
+
+	s := testScheme()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(readyClusterIssuerAt(srv.URL),
+			credentialsSecret("certforge-credentials", "certforge-system", "tok"),
+			cr).
+		// Parent Certificate intentionally NOT in the store.
+		WithStatusSubresource(&cmapi.CertificateRequest{}).
+		Build()
+	r := &CertificateRequestReconciler{Client: fakeClient}
+
+	// Must succeed — the missing Certificate is a durability no-op, not a failure.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-cr", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error when parent Certificate is missing: %v", err)
+	}
+
+	updated := &cmapi.CertificateRequest{}
+	if err := fakeClient.Get(context.Background(),
+		types.NamespacedName{Name: "my-cr", Namespace: "default"}, updated); err != nil {
+		t.Fatalf("re-fetch CR: %v", err)
+	}
+	// The Denied condition must still be set — stamp failure is not fatal.
+	if !isConditionTrue(updated, cmapi.CertificateRequestConditionDenied) {
+		t.Error("expected Denied=True even when stampCertificateDenied cannot fetch parent Certificate")
+	}
+}
+
 // TestResolveIssuer_NoCredentialSource: issuer has neither authSecretRef nor
 // workloadIdentity → error mentioning credential source.
 func TestResolveIssuer_NoCredentialSource(t *testing.T) {
