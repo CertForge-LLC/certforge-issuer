@@ -1,4 +1,4 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- if ((.Values.networkPolicy).enabled) }}
 # NetworkPolicy restricts the certforge-issuer controller pod to only the
 # traffic it actually needs. Enable with networkPolicy.enabled=true.
 #

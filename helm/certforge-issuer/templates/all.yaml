@@ -150,13 +150,13 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
-          {{- if .Values.workloadIdentity.enabled }}
+          {{- if ((.Values.workloadIdentity).enabled) }}
           volumeMounts:
             - name: certforge-token
               mountPath: /var/run/secrets/certforge
               readOnly: true
           {{- end }}
-      {{- if .Values.workloadIdentity.enabled }}
+      {{- if ((.Values.workloadIdentity).enabled) }}
       volumes:
         - name: certforge-token
           projected:
