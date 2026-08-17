@@ -121,7 +121,9 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	})
 
 	logger.Info("issuer ready", "url", spec.URL)
-	return ctrl.Result{}, updateStatus(ctx)
+	// Re-ping every 5 minutes so the issuer catches token rotation, server
+	// restarts, and connectivity failures without waiting for an object edit.
+	return ctrl.Result{RequeueAfter: 5 * time.Minute}, updateStatus(ctx)
 }
 
 // loadIssuer loads either kind and returns a uniform view plus a status update closure.

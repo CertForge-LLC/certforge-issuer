@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -274,5 +275,52 @@ func TestAPIErrMessage_FallsBackToRawBody(t *testing.T) {
 	got := apiErrMessage([]byte(raw))
 	if got != raw {
 		t.Errorf("got %q, want %q", got, raw)
+	}
+}
+
+// ── FileTokenSource ───────────────────────────────────────────────────────────
+
+// TestFileTokenSource_HappyPath: reads a token from a file and trims whitespace.
+// Simulates a projected ServiceAccount token file written by the kubelet.
+func TestFileTokenSource_HappyPath(t *testing.T) {
+	f, err := os.CreateTemp("", "certforge-token-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString("my-sa-token\n"); err != nil { // kubelet appends a newline
+		t.Fatal(err)
+	}
+	f.Close()
+
+	ts := FileTokenSource{path: f.Name()}
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("Token() unexpected error: %v", err)
+	}
+	if tok != "my-sa-token" {
+		t.Errorf("token = %q, want %q (should strip trailing newline)", tok, "my-sa-token")
+	}
+}
+
+// TestPolicyError_Error: the Error() method returns the message — needed by
+// errors.As callers and the %v formatting in log output.
+func TestPolicyError_Error(t *testing.T) {
+	e := &PolicyError{Message: "domain not covered by any DTP"}
+	if got := e.Error(); got != "domain not covered by any DTP" {
+		t.Errorf("Error() = %q, want message string", got)
+	}
+}
+
+// TestFileTokenSource_MissingFile: a missing token file returns a descriptive
+// error — the controller should surface this as PingFailed/token-read-error.
+func TestFileTokenSource_MissingFile(t *testing.T) {
+	ts := FileTokenSource{path: "/nonexistent/certforge/token"}
+	_, err := ts.Token()
+	if err == nil {
+		t.Fatal("expected error for missing token file")
+	}
+	if !strings.Contains(err.Error(), "read token file") {
+		t.Errorf("error %q should mention 'read token file'", err.Error())
 	}
 }
