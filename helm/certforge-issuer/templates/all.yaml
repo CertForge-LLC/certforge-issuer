@@ -35,7 +35,7 @@ rules:
   # cert-manager's backoff retries from re-submitting to CertForge.
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "list", "watch", "patch"]
   # Approve/deny CertificateRequests for certforge.io issuers.
   # Required so certforge-issuer can set Denied=True on rejection, which is the
   # only truly terminal condition in cert-manager (prevents retry loops).

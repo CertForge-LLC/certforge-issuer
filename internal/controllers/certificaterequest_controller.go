@@ -92,7 +92,13 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	const deniedMsg = "A previous request for this Certificate was rejected by a CertForge approver. " +
 		"Delete the Certificate object to submit a new certificate request."
 
-	if certName := cr.Labels["cert-manager.io/certificate-name"]; certName != "" {
+	// cert-manager v1.15+ stores certificate-name as an annotation; older
+	// releases used a label. Check both for compatibility.
+	certName := cr.Labels["cert-manager.io/certificate-name"]
+	if certName == "" {
+		certName = cr.Annotations["cert-manager.io/certificate-name"]
+	}
+	if certName != "" {
 		// Layer 1: check parent Certificate annotation.
 		parentCert := &cmapi.Certificate{}
 		if err := r.Get(ctx, types.NamespacedName{Name: certName, Namespace: cr.Namespace}, parentCert); err == nil {
@@ -374,7 +380,11 @@ func isConditionTrue(cr *cmapi.CertificateRequest, t cmapi.CertificateRequestCon
 // Errors are logged and silently ignored — the CR's Denied condition is already set and
 // that is the authoritative signal; the annotation is a durability optimisation.
 func (r *CertificateRequestReconciler) stampCertificateDenied(ctx context.Context, cr *cmapi.CertificateRequest) {
+	// cert-manager v1.15+ stores certificate-name as an annotation; older releases used a label.
 	certName := cr.Labels["cert-manager.io/certificate-name"]
+	if certName == "" {
+		certName = cr.Annotations["cert-manager.io/certificate-name"]
+	}
 	if certName == "" {
 		return
 	}
