@@ -37,15 +37,15 @@ governance is in place without changing a single workload manifest.
 
 - Kubernetes 1.24+
 - cert-manager v1.14+
-- A CertForge account — [free tier](https://certgovernance.app) includes 100 certificates,
-  25 domains, full approval workflows, and audit log export. No credit card required.
+- A CertForge account — [start free](https://app.certgovernance.app/signup?source=helm-issuer):
+  100 certificates, 25 domains, full approval workflows, and audit log export. No credit card required.
 
 ### CertForge setup (required before installation)
 
 The issuer will reject certificate requests if CertForge is not configured for your domains.
 Complete these steps first — they take about five minutes.
 
-1. **Create an account** at [certgovernance.app](https://certgovernance.app) and set up your organization.
+1. **Create an account** at [app.certgovernance.app/signup](https://app.certgovernance.app/signup?source=helm-issuer) and set up your organization.
 
 2. **Add your domains** — in CertForge, create a Domain Trust Profile (DTP) that covers the
    domains your Kubernetes workloads will request certificates for. The DTP defines which CA to
@@ -599,8 +599,8 @@ docker build -t certforge-issuer:dev .
 
 ## Get Started Free
 
-[certgovernance.app](https://certgovernance.app) — 100 certificates, 25 domains, full approval
-workflows, audit log and export. No credit card required.
+[Create a free CertForge account](https://app.certgovernance.app/signup?source=helm-issuer) — 100 certificates,
+25 domains, full approval workflows, audit log and export. No credit card required.
 
 ## License
 
