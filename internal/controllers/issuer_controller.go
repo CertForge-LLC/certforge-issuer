@@ -3,6 +3,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,9 +33,81 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Resolve credentials: either a static token from a Secret or a dynamic
-	// projected ServiceAccount token read from a file (workload identity).
-	// Exactly one of spec.AuthSecretRef and spec.WorkloadIdentity must be set.
+	// ── Resolve credentials ──────────────────────────────────────────────────
+	// Three auth modes, checked in priority order:
+	//   1. MTLSSecretRef — mTLS client cert (preferred; bypasses Cloudflare)
+	//   2. AuthSecretRef — static bearer token in a Secret
+	//   3. WorkloadIdentity — projected ServiceAccount token read from a file
+	secretNS := req.Namespace
+	if r.Kind == "CertForgeClusterIssuer" {
+		secretNS = "certforge-system"
+		if spec.SecretNamespace != "" {
+			secretNS = spec.SecretNamespace
+		}
+	}
+
+	// ── Mode 1: mTLS client cert ─────────────────────────────────────────────
+	if spec.MTLSSecretRef != nil {
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: spec.MTLSSecretRef.Name, Namespace: secretNS}, secret); err != nil {
+			logger.Error(err, "mTLS secret not found", "secret", spec.MTLSSecretRef.Name)
+			meta.SetStatusCondition(statusConditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "SecretNotFound",
+				Message: fmt.Sprintf("mTLS Secret %s/%s not found: %v", secretNS, spec.MTLSSecretRef.Name, err),
+			})
+			return ctrl.Result{}, updateStatus(ctx)
+		}
+		host := strings.TrimSpace(string(secret.Data["mtls_host"]))
+		portStr := strings.TrimSpace(string(secret.Data["mtls_port"]))
+		port := 8443
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		if host == "" {
+			// Fall back to deriving host from spec.URL
+			host = strings.TrimPrefix(strings.TrimPrefix(spec.URL, "https://"), "http://")
+		}
+		creds := MTLSCreds{
+			Endpoint:   fmt.Sprintf("https://%s:%d", host, port),
+			ClientCert: secret.Data["client.crt"],
+			ClientKey:  secret.Data["client.key"],
+			ServerCert: secret.Data["server.crt"],
+		}
+		mtlsClient, err := newMTLSClient(creds)
+		if err != nil {
+			meta.SetStatusCondition(statusConditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "MTLSCredentialError",
+				Message: fmt.Sprintf("build mTLS client from %s/%s: %v", secretNS, spec.MTLSSecretRef.Name, err),
+			})
+			return ctrl.Result{}, updateStatus(ctx)
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := mtlsClient.Ping(pingCtx); err != nil {
+			logger.Error(err, "CertForge mTLS ping failed", "endpoint", creds.Endpoint)
+			meta.SetStatusCondition(statusConditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "PingFailed",
+				Message: err.Error(),
+			})
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, updateStatus(ctx)
+		}
+		meta.SetStatusCondition(statusConditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "Verified",
+			Message: fmt.Sprintf("mTLS credentials verified, connected to %s", creds.Endpoint),
+		})
+		logger.Info("issuer ready (mTLS)", "endpoint", creds.Endpoint)
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, updateStatus(ctx)
+	}
+
+	// ── Modes 2 & 3: bearer token ────────────────────────────────────────────
 	var ts TokenSource
 
 	switch {
@@ -51,19 +125,12 @@ func (r *IssuerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			Type:    "Ready",
 			Status:  metav1.ConditionFalse,
 			Reason:  "InvalidSpec",
-			Message: "one of spec.authSecretRef or spec.workloadIdentity must be set",
+			Message: "one of spec.authSecretRef, spec.workloadIdentity, or spec.mtlsSecretRef must be set",
 		})
 		return ctrl.Result{}, updateStatus(ctx)
 
 	case spec.AuthSecretRef != nil:
 		// Static token path: read from Secret.
-		secretNS := req.Namespace
-		if r.Kind == "CertForgeClusterIssuer" {
-			secretNS = "certforge-system"
-			if spec.SecretNamespace != "" {
-				secretNS = spec.SecretNamespace
-			}
-		}
 		secret := &corev1.Secret{}
 		if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
 			logger.Error(err, "credentials secret not found", "secret", spec.AuthSecretRef.Name)

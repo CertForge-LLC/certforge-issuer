@@ -90,6 +90,21 @@ type CertForgeIssuerSpec struct {
 	// Has no effect on namespace-scoped CertForgeIssuer resources.
 	// +optional
 	SecretNamespace string `json:"secretNamespace,omitempty"`
+
+	// MTLSSecretRef references a Secret containing mTLS credentials written by
+	// "certforge-issuer enroll". When set, the issuer uses mTLS client cert auth
+	// to communicate with CertForge directly (bypassing Cloudflare) instead of
+	// a bearer token. The Secret must be in the same namespace as the issuer (or
+	// certforge-system for CertForgeClusterIssuer). Required keys:
+	//   client.crt  — PEM mTLS client certificate
+	//   client.key  — PEM mTLS client private key
+	//   server.crt  — PEM mTLS server cert for pinning (self-signed; no system trust needed)
+	//   mtls_host   — direct-DNS hostname for the mTLS port (e.g. usagent.certgov.app)
+	//   mtls_port   — port number string (e.g. "8444")
+	// Mutually exclusive with authSecretRef and workloadIdentity; when set those
+	// fields are ignored.
+	// +optional
+	MTLSSecretRef *corev1.LocalObjectReference `json:"mtlsSecretRef,omitempty"`
 }
 
 // CertForgeIssuerStatus defines the observed state of CertForgeIssuer.

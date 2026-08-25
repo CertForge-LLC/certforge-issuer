@@ -3,6 +3,8 @@ package controllers
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -86,6 +88,46 @@ func newClientWithTokenSource(baseURL string, ts TokenSource) *certforgeClient {
 	}
 }
 
+// MTLSCreds holds the mTLS credentials loaded from a K8s Secret by "certforge-issuer enroll".
+type MTLSCreds struct {
+	// Endpoint is the full base URL for the mTLS port, e.g. https://usagent.certgov.app:8444
+	Endpoint string
+	// ClientCert is the PEM client certificate.
+	ClientCert []byte
+	// ClientKey is the PEM client private key.
+	ClientKey []byte
+	// ServerCert is the PEM mTLS server cert for pinning. The server always uses a
+	// self-signed cert on the mTLS port; we pin it instead of using the system trust store.
+	ServerCert []byte
+}
+
+// newMTLSClient creates a certforgeClient that uses mTLS client cert auth and
+// connects to the mTLS port directly (bypassing Cloudflare). No bearer token is used.
+func newMTLSClient(creds MTLSCreds) (*certforgeClient, error) {
+	cert, err := tls.X509KeyPair(creds.ClientCert, creds.ClientKey)
+	if err != nil {
+		return nil, fmt.Errorf("parse mTLS client cert/key: %w", err)
+	}
+	// Build a trust pool from the pinned server cert only — do not include the
+	// system pool. This ensures we connect ONLY to our known CertForge mTLS server.
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(creds.ServerCert) {
+		return nil, fmt.Errorf("parse mTLS server cert for pinning: no PEM block found")
+	}
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      pool,
+			MinVersion:   tls.VersionTLS12,
+		},
+	}
+	return &certforgeClient{
+		baseURL: creds.Endpoint,
+		ts:      nil, // no bearer token — mTLS cert is the credential
+		http:    &http.Client{Timeout: 30 * time.Second, Transport: transport},
+	}, nil
+}
+
 type submitRequest struct {
 	CSR               string `json:"csr"`
 	Source            string `json:"source"`
@@ -104,10 +146,6 @@ type certResponse struct {
 // Submit posts a CSR to CertForge and returns the request ID.
 // issuanceProfileID is optional; pass "" to use the DTP default.
 func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, issuanceProfileID string) (string, error) {
-	token, err := c.ts.Token()
-	if err != nil {
-		return "", fmt.Errorf("get token: %w", err)
-	}
 	body, _ := json.Marshal(submitRequest{
 		CSR:               csrPEM,
 		Source:            "cert-manager",
@@ -121,7 +159,13 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
+	if c.ts != nil {
+		token, err := c.ts.Token()
+		if err != nil {
+			return "", fmt.Errorf("get token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -149,15 +193,17 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 // token is valid and the CertForge server is reachable. It returns nil on success,
 // or a descriptive error that distinguishes auth failures from connectivity failures.
 func (c *certforgeClient) Ping(ctx context.Context) error {
-	token, err := c.ts.Token()
-	if err != nil {
-		return fmt.Errorf("get token: %w", err)
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/ping", nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if c.ts != nil {
+		token, err := c.ts.Token()
+		if err != nil {
+			return fmt.Errorf("get token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -183,16 +229,18 @@ func (c *certforgeClient) Poll(ctx context.Context, id string) (certResponse, er
 	if id == "" {
 		return certResponse{}, fmt.Errorf("empty request ID")
 	}
-	token, err := c.ts.Token()
-	if err != nil {
-		return certResponse{}, fmt.Errorf("get token: %w", err)
-	}
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		c.baseURL+"/api/v1/certificate-requests/"+id, nil)
 	if err != nil {
 		return certResponse{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if c.ts != nil {
+		token, err := c.ts.Token()
+		if err != nil {
+			return certResponse{}, fmt.Errorf("get token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

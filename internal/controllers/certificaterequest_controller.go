@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -131,8 +133,8 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 	}
 
-	// Resolve the issuer and load credentials.
-	cfURL, ts, issuerProfileID, err := r.resolveIssuer(ctx, cr)
+	// Resolve the issuer and build the CertForge client.
+	cf, issuerProfileID, err := r.resolveIssuer(ctx, cr)
 	if err != nil {
 		logger.Error(err, "failed to resolve issuer")
 		setCondition(cr, cmapi.CertificateRequestConditionReady,
@@ -148,8 +150,6 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if issuanceProfileID == "" {
 		issuanceProfileID = issuerProfileID
 	}
-
-	cf := newClientWithTokenSource(cfURL, ts)
 
 	// Check if we already submitted this request (stored in annotation).
 	requestID := cr.Annotations[annotationRequestID]
@@ -269,36 +269,72 @@ func (r *CertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.R
 }
 
 // resolveIssuer finds the Issuer or ClusterIssuer, checks it is Ready, and
-// returns the CertForge URL, a TokenSource, the default issuance profile ID,
-// and any error. The TokenSource is either Secret-backed (static token) or
-// file-backed (projected ServiceAccount token that rotates hourly).
-func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cmapi.CertificateRequest) (string, TokenSource, string, error) {
+// returns a ready-to-use certforgeClient and the default issuance profile ID.
+// Supports mTLS (MTLSSecretRef), static token (AuthSecretRef), and workload identity.
+func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cmapi.CertificateRequest) (*certforgeClient, string, error) {
 	var spec certforgev1alpha1.CertForgeIssuerSpec
 
 	switch cr.Spec.IssuerRef.Kind {
 	case "CertForgeClusterIssuer", "":
 		obj := &certforgev1alpha1.CertForgeClusterIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name}, obj); err != nil {
-			return "", nil, "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+			return nil, "", fmt.Errorf("ClusterIssuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
 		if !apimeta.IsStatusConditionTrue(obj.Status.Conditions, "Ready") {
-			return "", nil, "", fmt.Errorf("ClusterIssuer %q is not ready", cr.Spec.IssuerRef.Name)
+			return nil, "", fmt.Errorf("ClusterIssuer %q is not ready", cr.Spec.IssuerRef.Name)
 		}
 		spec = obj.Spec
 	case "CertForgeIssuer":
 		obj := &certforgev1alpha1.CertForgeIssuer{}
 		if err := r.Get(ctx, types.NamespacedName{Name: cr.Spec.IssuerRef.Name, Namespace: cr.Namespace}, obj); err != nil {
-			return "", nil, "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
+			return nil, "", fmt.Errorf("Issuer %q not found: %w", cr.Spec.IssuerRef.Name, err)
 		}
 		if !apimeta.IsStatusConditionTrue(obj.Status.Conditions, "Ready") {
-			return "", nil, "", fmt.Errorf("Issuer %q is not ready", cr.Spec.IssuerRef.Name)
+			return nil, "", fmt.Errorf("Issuer %q is not ready", cr.Spec.IssuerRef.Name)
 		}
 		spec = obj.Spec
 	default:
-		return "", nil, "", fmt.Errorf("unknown issuer kind %q", cr.Spec.IssuerRef.Kind)
+		return nil, "", fmt.Errorf("unknown issuer kind %q", cr.Spec.IssuerRef.Kind)
 	}
 
-	// Resolve the token source: Secret-backed (static) or file-backed (workload identity).
+	// Resolve the namespace for credential Secrets.
+	secretNS := cr.Namespace
+	if cr.Spec.IssuerRef.Kind == "CertForgeClusterIssuer" || cr.Spec.IssuerRef.Kind == "" {
+		secretNS = "certforge-system"
+		if spec.SecretNamespace != "" {
+			secretNS = spec.SecretNamespace
+		}
+	}
+
+	// ── Mode 1: mTLS client cert (preferred) ─────────────────────────────────
+	if spec.MTLSSecretRef != nil {
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: spec.MTLSSecretRef.Name, Namespace: secretNS}, secret); err != nil {
+			return nil, "", fmt.Errorf("mTLS secret %q not found: %w", spec.MTLSSecretRef.Name, err)
+		}
+		host := strings.TrimSpace(string(secret.Data["mtls_host"]))
+		portStr := strings.TrimSpace(string(secret.Data["mtls_port"]))
+		port := 8443
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		if host == "" {
+			host = strings.TrimPrefix(strings.TrimPrefix(spec.URL, "https://"), "http://")
+		}
+		creds := MTLSCreds{
+			Endpoint:   fmt.Sprintf("https://%s:%d", host, port),
+			ClientCert: secret.Data["client.crt"],
+			ClientKey:  secret.Data["client.key"],
+			ServerCert: secret.Data["server.crt"],
+		}
+		cf, err := newMTLSClient(creds)
+		if err != nil {
+			return nil, "", fmt.Errorf("build mTLS client from secret %q: %w", spec.MTLSSecretRef.Name, err)
+		}
+		return cf, spec.IssuanceProfileID, nil
+	}
+
+	// ── Modes 2 & 3: bearer token ─────────────────────────────────────────────
 	var ts TokenSource
 	switch {
 	case spec.WorkloadIdentity != nil:
@@ -309,31 +345,21 @@ func (r *CertificateRequestReconciler) resolveIssuer(ctx context.Context, cr *cm
 		ts = FileTokenSource{path: tokenFile}
 
 	case spec.AuthSecretRef != nil:
-		// Resolve the namespace for the credentials Secret.
-		// For ClusterIssuer: use SecretNamespace if set, else default to "certforge-system".
-		// For namespace-scoped Issuer: use the CertificateRequest's own namespace.
-		secretNS := cr.Namespace
-		if cr.Spec.IssuerRef.Kind == "CertForgeClusterIssuer" || cr.Spec.IssuerRef.Kind == "" {
-			secretNS = "certforge-system"
-			if spec.SecretNamespace != "" {
-				secretNS = spec.SecretNamespace
-			}
-		}
 		secret := &corev1.Secret{}
 		if err := r.Get(ctx, types.NamespacedName{Name: spec.AuthSecretRef.Name, Namespace: secretNS}, secret); err != nil {
-			return "", nil, "", fmt.Errorf("credentials secret %q not found: %w", spec.AuthSecretRef.Name, err)
+			return nil, "", fmt.Errorf("credentials secret %q not found: %w", spec.AuthSecretRef.Name, err)
 		}
 		token := string(secret.Data["token"])
 		if token == "" {
-			return "", nil, "", fmt.Errorf("secret %q has no 'token' key", spec.AuthSecretRef.Name)
+			return nil, "", fmt.Errorf("secret %q has no 'token' key", spec.AuthSecretRef.Name)
 		}
 		ts = StaticTokenSource{token: token}
 
 	default:
-		return "", nil, "", fmt.Errorf("issuer has no credential source (set authSecretRef or workloadIdentity)")
+		return nil, "", fmt.Errorf("issuer has no credential source (set mtlsSecretRef, authSecretRef, or workloadIdentity)")
 	}
 
-	return spec.URL, ts, spec.IssuanceProfileID, nil
+	return newClientWithTokenSource(spec.URL, ts), spec.IssuanceProfileID, nil
 }
 
 // setCondition mutates cr.Status.Conditions in memory — callers own the status write.
