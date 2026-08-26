@@ -1,14 +1,9 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: certforge-system
----
 {{- if .Values.tokenSecret.create }}
 apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Values.tokenSecret.name }}
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
 stringData:
   token: {{ .Values.certforge.token | quote }}
 ---
@@ -17,12 +12,12 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: certforge-issuer
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: certforge-issuer
+  name: certforge-issuer-{{ .Release.Namespace }}
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificaterequests"]
@@ -59,23 +54,23 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: certforge-issuer
+  name: certforge-issuer-{{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: certforge-issuer
+  name: certforge-issuer-{{ .Release.Namespace }}
 subjects:
   - kind: ServiceAccount
     name: certforge-issuer
-    namespace: certforge-system
+    namespace: {{ .Release.Namespace }}
 ---
-# Leases are namespace-scoped to certforge-system to avoid granting
-# cluster-wide lease access just for leader election.
+# Leases are namespace-scoped to avoid granting cluster-wide lease access
+# just for leader election.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: certforge-issuer-leader-election
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -89,7 +84,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: certforge-issuer-leader-election
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -97,13 +92,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: certforge-issuer
-    namespace: certforge-system
+    namespace: {{ .Release.Namespace }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: certforge-issuer
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
   labels:
     app: certforge-issuer
 spec:
@@ -150,14 +145,19 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
-          {{- if ((.Values.workloadIdentity).enabled) }}
           volumeMounts:
+            {{- if ((.Values.workloadIdentity).enabled) }}
             - name: certforge-token
               mountPath: /var/run/secrets/certforge
               readOnly: true
-          {{- end }}
-      {{- if ((.Values.workloadIdentity).enabled) }}
+            {{- end }}
+            {{- if .Values.certforge.mtlsSecretRef }}
+            - name: certforge-mtls
+              mountPath: /var/run/secrets/certforge-mtls
+              readOnly: true
+            {{- end }}
       volumes:
+        {{- if ((.Values.workloadIdentity).enabled) }}
         - name: certforge-token
           projected:
             sources:
@@ -165,7 +165,12 @@ spec:
                   audience: {{ .Values.workloadIdentity.audience | quote }}
                   expirationSeconds: {{ .Values.workloadIdentity.expirationSeconds }}
                   path: token
-      {{- end }}
+        {{- end }}
+        {{- if .Values.certforge.mtlsSecretRef }}
+        - name: certforge-mtls
+          secret:
+            secretName: {{ .Values.certforge.mtlsSecretRef }}
+        {{- end }}
       terminationGracePeriodSeconds: 10
 ---
 # Service exposes the controller's metrics and health ports so that
@@ -175,7 +180,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: certforge-issuer-metrics
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
   labels:
     app: certforge-issuer
 spec:

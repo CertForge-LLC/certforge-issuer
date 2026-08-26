@@ -6,6 +6,7 @@
 #   - DNS (UDP/TCP 53):  hostname resolution for CertForge API and kube-apiserver
 #   - Port 443:          Kubernetes API server (most managed clusters) + CertForge API
 #   - Port 6443:         Kubernetes API server (kubeadm clusters, set by kubeApiServerPort)
+#   - Port 8443/8444:    CertForge agent endpoint for mTLS auth (set by certforge.mtlsPort)
 #
 # If your CNI does not support NetworkPolicy (e.g. Flannel without a policy
 # engine), this object is silently ignored — install Calico, Cilium, or a
@@ -14,7 +15,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: certforge-issuer
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
   labels:
     app: certforge-issuer
 spec:
@@ -45,11 +46,18 @@ spec:
           protocol: TCP
 
     # Kubernetes API server + CertForge HTTPS API.
-    # Port 443:  used by managed clusters (EKS, GKE, AKS) and CertForge API.
+    # Port 443:  used by managed clusters (EKS, GKE, AKS) and CertForge API (token/WI auth).
     # Port 6443: used by kubeadm/kind clusters. Override with kubeApiServerPort.
     - ports:
         - port: 443
           protocol: TCP
         - port: {{ .Values.networkPolicy.kubeApiServerPort }}
           protocol: TCP
+
+    {{- if .Values.certforge.mtlsSecretRef }}
+    # CertForge agent endpoint for mTLS auth — direct connection, bypasses Cloudflare.
+    - ports:
+        - port: {{ .Values.certforge.mtlsPort | default 8443 }}
+          protocol: TCP
+    {{- end }}
 {{- end }}

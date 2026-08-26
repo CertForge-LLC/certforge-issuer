@@ -14,7 +14,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: certforge-issuer
-  namespace: certforge-system
+  namespace: {{ .Release.Namespace }}
   labels:
     app: certforge-issuer
     {{- with .Values.serviceMonitor.additionalLabels }}
@@ -26,7 +26,7 @@ spec:
       app: certforge-issuer
   namespaceSelector:
     matchNames:
-      - certforge-system
+      - {{ .Release.Namespace }}
   endpoints:
     - port: metrics
       path: /metrics
