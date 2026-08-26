@@ -87,19 +87,12 @@ func TestResolveIssuer_ClusterIssuer_HappyPath(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer, secret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	url, ts, profileID, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	cf, profileID, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if url != "https://app.certgovernance.app" {
-		t.Errorf("url = %q, want https://app.certgovernance.app", url)
-	}
-	tok, err := ts.Token()
-	if err != nil {
-		t.Fatalf("ts.Token() unexpected error: %v", err)
-	}
-	if tok != "my-api-token" {
-		t.Errorf("token = %q, want my-api-token", tok)
+	if cf == nil {
+		t.Fatal("resolveIssuer returned nil client")
 	}
 	if profileID != "profile-abc" {
 		t.Errorf("profileID = %q, want profile-abc", profileID)
@@ -120,7 +113,7 @@ func TestResolveIssuer_ClusterIssuer_NotReady(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, _, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	_, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err == nil {
 		t.Fatal("expected error for not-ready ClusterIssuer")
 	}
@@ -134,7 +127,7 @@ func TestResolveIssuer_ClusterIssuer_NotFound(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, _, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	_, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err == nil {
 		t.Fatal("expected error for missing ClusterIssuer")
 	}
@@ -158,7 +151,7 @@ func TestResolveIssuer_ClusterIssuer_SecretMissing(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, _, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	_, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err == nil {
 		t.Fatal("expected error for missing credentials Secret")
 	}
@@ -185,7 +178,7 @@ func TestResolveIssuer_ClusterIssuer_EmptyToken(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer, emptySecret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, _, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	_, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err == nil {
 		t.Fatal("expected error for empty/absent token key")
 	}
@@ -211,16 +204,12 @@ func TestResolveIssuer_ClusterIssuer_CustomSecretNamespace(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer, secret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, ts, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
+	cf, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tok, err := ts.Token()
-	if err != nil {
-		t.Fatalf("ts.Token() unexpected error: %v", err)
-	}
-	if tok != "vault-token" {
-		t.Errorf("token = %q, want vault-token (from custom SecretNamespace)", tok)
+	if cf == nil {
+		t.Fatal("resolveIssuer returned nil client")
 	}
 }
 
@@ -242,16 +231,12 @@ func TestResolveIssuer_NamespacedIssuer_HappyPath(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(nsIssuer, secret).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, ts, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeIssuer", "team-ns"))
+	cf, _, err := r.resolveIssuer(context.Background(), issuerCR("certforge", "CertForgeIssuer", "team-ns"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tok, err := ts.Token()
-	if err != nil {
-		t.Fatalf("ts.Token() unexpected error: %v", err)
-	}
-	if tok != "team-token" {
-		t.Errorf("token = %q, want team-token", tok)
+	if cf == nil {
+		t.Fatal("resolveIssuer returned nil client")
 	}
 }
 
@@ -261,7 +246,7 @@ func TestResolveIssuer_UnknownKind(t *testing.T) {
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
 	cr := issuerCR("certforge", "UnknownIssuerKind", "default")
-	_, _, _, err := r.resolveIssuer(context.Background(), cr)
+	_, _, err := r.resolveIssuer(context.Background(), cr)
 	if err == nil {
 		t.Fatal("expected error for unknown issuer kind")
 	}

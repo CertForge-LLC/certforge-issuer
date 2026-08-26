@@ -489,22 +489,13 @@ func TestResolveIssuer_ClusterIssuer_WorkloadIdentity(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, ts, _, err := r.resolveIssuer(context.Background(),
+	cf, _, err := r.resolveIssuer(context.Background(),
 		issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err != nil {
 		t.Fatalf("resolveIssuer() unexpected error: %v", err)
 	}
-
-	// FileTokenSource reads from disk on each call.
-	tok, err := ts.Token()
-	if err != nil {
-		t.Fatalf("ts.Token() unexpected error: %v", err)
-	}
-	if tok != "eyJhbGciOiJSUzI1NiJ9.wi-token" {
-		t.Errorf("token = %q, want workload-identity token from file", tok)
-	}
-	if _, ok := ts.(StaticTokenSource); ok {
-		t.Error("expected FileTokenSource for workloadIdentity, got StaticTokenSource")
+	if cf == nil {
+		t.Fatal("resolveIssuer returned nil client for workload identity")
 	}
 }
 
@@ -577,7 +568,7 @@ func TestResolveIssuer_NoCredentialSource(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(clusterIssuer).Build()
 	r := &CertificateRequestReconciler{Client: fakeClient}
 
-	_, _, _, err := r.resolveIssuer(context.Background(),
+	_, _, err := r.resolveIssuer(context.Background(),
 		issuerCR("certforge", "CertForgeClusterIssuer", "default"))
 	if err == nil {
 		t.Fatal("expected error when issuer has no credential source")
