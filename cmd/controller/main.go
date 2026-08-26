@@ -19,6 +19,9 @@ import (
 	"github.com/certforge/certforge-issuer/internal/controllers"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=vX.Y.Z".
+var Version = "dev"
+
 var scheme = runtime.NewScheme()
 
 func init() {
@@ -28,6 +31,7 @@ func init() {
 }
 
 func main() {
+	controllers.AgentVersion = Version
 	var metricsAddr string
 	var probeAddr string
 	var leaderElect bool

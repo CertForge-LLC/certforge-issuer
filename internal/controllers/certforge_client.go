@@ -43,6 +43,11 @@ func (f FileTokenSource) Token() (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
+// AgentVersion is the running binary version, injected from main via ldflags.
+// It is sent as X-Agent-Version on every CertForge API request so the server
+// can display the running version in the Agent Registry.
+var AgentVersion = "dev"
+
 // PolicyError is returned when CertForge rejects a CSR due to policy (HTTP 422).
 // It is a terminal error — retrying will not help until the policy is updated.
 type PolicyError struct{ Message string }
@@ -143,6 +148,21 @@ type certResponse struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
+// setHeaders applies auth and version headers to every outbound request.
+func (c *certforgeClient) setHeaders(req *http.Request) error {
+	if c.ts != nil {
+		token, err := c.ts.Token()
+		if err != nil {
+			return fmt.Errorf("get token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if AgentVersion != "" {
+		req.Header.Set("X-Agent-Version", AgentVersion)
+	}
+	return nil
+}
+
 // Submit posts a CSR to CertForge and returns the request ID.
 // issuanceProfileID is optional; pass "" to use the DTP default.
 func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, issuanceProfileID string) (string, error) {
@@ -159,12 +179,8 @@ func (c *certforgeClient) Submit(ctx context.Context, csrPEM, namespace, name, i
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.ts != nil {
-		token, err := c.ts.Token()
-		if err != nil {
-			return "", fmt.Errorf("get token: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
+	if err := c.setHeaders(req); err != nil {
+		return "", err
 	}
 
 	resp, err := c.http.Do(req)
@@ -197,12 +213,8 @@ func (c *certforgeClient) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if c.ts != nil {
-		token, err := c.ts.Token()
-		if err != nil {
-			return fmt.Errorf("get token: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
+	if err := c.setHeaders(req); err != nil {
+		return err
 	}
 
 	resp, err := c.http.Do(req)
@@ -234,12 +246,8 @@ func (c *certforgeClient) Poll(ctx context.Context, id string) (certResponse, er
 	if err != nil {
 		return certResponse{}, err
 	}
-	if c.ts != nil {
-		token, err := c.ts.Token()
-		if err != nil {
-			return certResponse{}, fmt.Errorf("get token: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
+	if err := c.setHeaders(req); err != nil {
+		return certResponse{}, err
 	}
 
 	resp, err := c.http.Do(req)

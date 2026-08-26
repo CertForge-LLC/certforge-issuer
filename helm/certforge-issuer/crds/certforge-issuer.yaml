@@ -32,13 +32,33 @@ spec:
           properties:
             spec:
               type: object
-              required: [url, authSecretRef]
+              required: [url]
               properties:
                 url:
                   type: string
-                  description: "Base URL of the CertForge server. Use https://app.certgovernance.app for US East or https://eu.certgovernance.app for EU West."
+                  pattern: '^https://'
+                  description: "Base URL of the CertForge server. Use https://app.certgov.app for US East."
                 authSecretRef:
                   type: object
+                  description: "References a Secret containing a 'token' key with a CertForge API bearer token. Mutually exclusive with workloadIdentity and mtlsSecretRef."
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                workloadIdentity:
+                  type: object
+                  description: "Configures authentication using a projected ServiceAccount token (OIDC). Mutually exclusive with authSecretRef and mtlsSecretRef."
+                  required: [audience]
+                  properties:
+                    audience:
+                      type: string
+                      description: "Audience for the projected ServiceAccount token. Must match the CertForge Workload Identity Provider."
+                    tokenFile:
+                      type: string
+                      description: "Path to the projected token file. Defaults to /var/run/secrets/certforge/token."
+                mtlsSecretRef:
+                  type: object
+                  description: "References a Secret written by certforge-issuer-enroll containing mTLS client credentials. When set, uses mTLS cert auth directly (bypasses Cloudflare). Mutually exclusive with authSecretRef and workloadIdentity."
                   required: [name]
                   properties:
                     name:
@@ -54,8 +74,11 @@ spec:
               properties:
                 conditions:
                   type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
                   items:
                     type: object
+                    required: [type, status]
                     properties:
                       type: {type: string}
                       status: {type: string}
@@ -97,13 +120,33 @@ spec:
           properties:
             spec:
               type: object
-              required: [url, authSecretRef]
+              required: [url]
               properties:
                 url:
                   type: string
-                  description: "Base URL of the CertForge server. Use https://app.certgovernance.app for US East or https://eu.certgovernance.app for EU West."
+                  pattern: '^https://'
+                  description: "Base URL of the CertForge server. Use https://app.certgov.app for US East."
                 authSecretRef:
                   type: object
+                  description: "References a Secret containing a 'token' key with a CertForge API bearer token. Mutually exclusive with workloadIdentity and mtlsSecretRef."
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                workloadIdentity:
+                  type: object
+                  description: "Configures authentication using a projected ServiceAccount token (OIDC). Mutually exclusive with authSecretRef and mtlsSecretRef."
+                  required: [audience]
+                  properties:
+                    audience:
+                      type: string
+                      description: "Audience for the projected ServiceAccount token. Must match the CertForge Workload Identity Provider."
+                    tokenFile:
+                      type: string
+                      description: "Path to the projected token file. Defaults to /var/run/secrets/certforge/token."
+                mtlsSecretRef:
+                  type: object
+                  description: "References a Secret written by certforge-issuer-enroll containing mTLS client credentials. When set, uses mTLS cert auth directly (bypasses Cloudflare). Mutually exclusive with authSecretRef and workloadIdentity."
                   required: [name]
                   properties:
                     name:
@@ -119,8 +162,11 @@ spec:
               properties:
                 conditions:
                   type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
                   items:
                     type: object
+                    required: [type, status]
                     properties:
                       type: {type: string}
                       status: {type: string}
