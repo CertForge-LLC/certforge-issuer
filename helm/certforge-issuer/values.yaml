@@ -11,13 +11,30 @@ image:
 #
 # Data residency: the URL and API token together determine which org and region
 # certificate requests are routed to. Use the appropriate URL for your region:
-#   US East: https://app.certgovernance.app   (default)
-#   EU West:  https://eu.certgovernance.app   (GDPR-aligned)
+#   US East: https://app.certgov.app   (default)
+#   EU West:  https://eu.certgov.app   (GDPR-aligned)
 certforge:
-  url: "https://app.certgovernance.app"
-  token: ""              # set this or use an existing secret
-  issuanceProfileID: ""  # optional: default issuance profile ID for all certs from this issuer
-  secretNamespace: ""    # optional: override namespace for the credentials Secret (ClusterIssuer only, default: certforge-system)
+  url: "https://app.certgov.app"
+
+  # ── Authentication — set ONE of the following ──────────────────────────────
+
+  # Option A: mTLS client certificate (recommended, requires v0.3.x+)
+  # Secret holds client.crt, client.key, server.crt — written by certforge-issuer-enroll.
+  # The controller connects directly to mtlsHost:mtlsPort, bypassing Cloudflare.
+  mtlsSecretRef: ""          # name of the Secret, e.g. certforge-mtls
+  mtlsHost: ""               # e.g. usagent.certgov.app (printed by certforge-issuer-enroll)
+  mtlsPort: 8443             # 8443 prod · 8444 preview/dev
+
+  # Option B: long-lived API token (stored in a Secret)
+  # Set tokenSecret.create=true to create the Secret automatically from this value.
+  # Not needed when workloadIdentity.enabled=true or mtlsSecretRef is set.
+  token: ""
+
+  # Option C: Workload Identity — see workloadIdentity block below (no token needed)
+
+  # ── Optional ───────────────────────────────────────────────────────────────
+  issuanceProfileID: ""  # default issuance profile ID for all certs from this issuer
+  secretNamespace: ""    # override namespace for the credentials Secret (ClusterIssuer only, default: certforge-system)
 
 tokenSecret:
   create: true     # create the Secret from certforge.token
@@ -50,7 +67,7 @@ workloadIdentity:
   enabled: false
   # audience must match the audience configured in the CertForge Workload
   # Identity Provider. Use your CertForge server URL.
-  audience: "https://app.certgovernance.app"
+  audience: "https://app.certgov.app"
   # expirationSeconds controls how long each token is valid before the kubelet
   # replaces it. 3600 (1 hour) is a reasonable minimum for most deployments.
   expirationSeconds: 3600

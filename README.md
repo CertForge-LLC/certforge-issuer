@@ -37,7 +37,7 @@ governance is in place without changing a single workload manifest.
 
 - Kubernetes 1.24+
 - cert-manager v1.14+
-- A CertForge account — [start free](https://app.certgovernance.app/signup?source=helm-issuer):
+- A CertForge account — [start free](https://app.certgov.app/signup?source=helm-issuer):
   100 certificates, 25 domains, full approval workflows, and audit log export. No credit card required.
 
 ### CertForge setup (required before installation)
@@ -45,7 +45,7 @@ governance is in place without changing a single workload manifest.
 The issuer will reject certificate requests if CertForge is not configured for your domains.
 Complete these steps first — they take about five minutes.
 
-1. **Create an account** at [app.certgovernance.app/signup](https://app.certgovernance.app/signup?source=helm-issuer) and set up your organization.
+1. **Create an account** at [app.certgov.app/signup](https://app.certgov.app/signup?source=helm-issuer) and set up your organization.
 
 2. **Add your domains** — in CertForge, create a Domain Trust Profile (DTP) that covers the
    domains your Kubernetes workloads will request certificates for. The DTP defines which CA to
@@ -60,19 +60,92 @@ Complete these steps first — they take about five minutes.
 
 ## Quick Start
 
-**Install the issuer.** Choose Secret-based auth (simplest) or Workload Identity
-(no long-lived token in the cluster). See [Workload Identity](#workload-identity) for
-the keyless path.
+**Install the issuer.** Choose an authentication method:
 
-**Secret-based auth** — the Helm chart creates a `certforge-credentials` Secret automatically:
+| Option | How it works | When to use |
+|--------|-------------|-------------|
+| **A — mTLS** (v0.3.x+) | Pinned client cert, direct connection to port 8443 | Recommended for new deployments |
+| **B — Workload Identity** | Short-lived projected ServiceAccount token | Recommended when OIDC is available |
+| **C — API key** | Long-lived token in a Kubernetes Secret | Simplest setup; legacy |
+
+### Option A — mTLS enrollment (recommended, v0.3.x+)
+
+**Step 1 — Install the enrollment helper** on any host with `kubectl` access to the cluster:
+
+```bash
+curl -LO https://github.com/CertForge-LLC/certforge-issuer/releases/latest/download/certforge-issuer-enroll-linux-amd64
+chmod +x certforge-issuer-enroll-linux-amd64
+sudo mv certforge-issuer-enroll-linux-amd64 /usr/local/bin/certforge-issuer-enroll
+```
+
+**Step 2 — Generate an enrollment token** in CertForge: **Integrations → Connector Agents → + Enroll Agent → Issuer**. Give it a label (e.g. `prod-cluster`) and copy the one-time token.
+
+**Step 3 — Enroll and write credentials to a Kubernetes Secret:**
+
+```bash
+certforge-issuer-enroll \
+  --token     <one-time-token>        \
+  --url       https://app.certgov.app \
+  --label     prod-cluster            \
+  --secret    certforge-mtls          \
+  --namespace certforge-system
+```
+
+This creates the `certforge-mtls` Secret containing `client.crt`, `client.key`, and `server.crt`.
+
+**Step 4 — Install the Helm chart:**
 
 ```bash
 helm install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
   --namespace certforge-system \
   --create-namespace \
-  --set certforge.url=https://app.certgovernance.app \
+  --set certforge.url=https://app.certgov.app \
+  --set certforge.mtlsSecretRef=certforge-mtls \
+  --set certforge.mtlsHost=usagent.certgov.app \
+  --set certforge.mtlsPort=8443 \
+  --set tokenSecret.create=false
+```
+
+**Step 5 — Create the issuer resource:**
+
+```yaml
+apiVersion: certforge.io/v1alpha1
+kind: CertForgeClusterIssuer
+metadata:
+  name: certforge
+spec:
+  url: https://app.certgov.app
+  mtlsSecretRef:
+    name: certforge-mtls
+  mtlsHost: usagent.certgov.app
+  mtlsPort: 8443
+```
+
+### Option B — Workload Identity
+
+See [Workload Identity](#workload-identity) for full setup steps.
+
+```bash
+helm install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
+  --namespace certforge-system \
+  --create-namespace \
+  --set certforge.url=https://app.certgov.app \
+  --set tokenSecret.create=false \
+  --set workloadIdentity.enabled=true \
+  --set workloadIdentity.audience=https://app.certgov.app
+```
+
+### Option C — API key (legacy)
+
+```bash
+helm install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
+  --namespace certforge-system \
+  --create-namespace \
+  --set certforge.url=https://app.certgov.app \
   --set certforge.token=<your-api-token>
 ```
+
+---
 
 **Create an issuer resource** in each namespace that needs certificates (or use
 `CertForgeClusterIssuer` for cluster-wide access — see [Usage](#usage)):
@@ -84,19 +157,22 @@ metadata:
   name: certforge
   namespace: default
 spec:
-  url: https://app.certgovernance.app
-  # Option A: Secret-based (long-lived token)
-  authSecretRef:
-    name: certforge-credentials
+  url: https://app.certgov.app
+  # Option A: mTLS client certificate (recommended, v0.3.x+)
+  mtlsSecretRef:
+    name: certforge-mtls
+  mtlsHost: usagent.certgov.app
+  mtlsPort: 8443
   # Option B: Workload Identity (short-lived projected token — no Secret needed)
   # workloadIdentity:
-  #   audience: https://app.certgovernance.app
+  #   audience: https://app.certgov.app
+  # Option C: Secret-based auth (long-lived token, legacy)
+  # authSecretRef:
+  #   name: certforge-credentials
 ```
 
-> The `certforge-credentials` Secret was created by the Helm chart above.
-> For `CertForgeClusterIssuer`, the Secret must be in the `certforge-system` namespace
-> (or the namespace set in `secretNamespace`).
-> Exactly one of `authSecretRef` or `workloadIdentity` must be set.
+> For `CertForgeClusterIssuer`, Secrets are read from `certforge-system` (or `secretNamespace`).
+> Exactly one of `authSecretRef`, `workloadIdentity`, or `mtlsSecretRef` must be set.
 
 **Reference it from your Certificate:**
 
@@ -170,17 +246,16 @@ kind: CertForgeClusterIssuer
 metadata:
   name: certforge
 spec:
-  url: https://app.certgovernance.app
+  url: https://app.certgov.app
   # Option A: Secret-based auth (long-lived token)
   authSecretRef:
     name: certforge-credentials
   # Option B: Workload Identity (no Secret — see Workload Identity section)
   # workloadIdentity:
-  #   audience: https://app.certgovernance.app
+  #   audience: https://app.certgov.app
 ```
 
-For Secret-based auth, the Secret is read from `certforge-system` by default. Use `secretNamespace`
-to override this. Exactly one of `authSecretRef` or `workloadIdentity` must be set.
+For Secret-based and mTLS auth, Secrets are read from `certforge-system` by default. Use `secretNamespace` to override. Exactly one of `authSecretRef`, `workloadIdentity`, or `mtlsSecretRef` must be set.
 
 ### Data Residency
 
@@ -191,8 +266,8 @@ Set `url` to the appropriate endpoint for your org's region:
 
 | Region | URL |
 |--------|-----|
-| US East (default) | `https://app.certgovernance.app` |
-| EU West (GDPR-aligned) | `https://eu.certgovernance.app` |
+| US East (default) | `https://app.certgov.app` |
+| EU West (GDPR-aligned) | `https://eu.certgov.app` |
 
 The `url` and API token together route every certificate request to the correct region. No other
 configuration is needed.
@@ -205,7 +280,7 @@ kind: CertForgeClusterIssuer
 metadata:
   name: certforge-eu
 spec:
-  url: https://eu.certgovernance.app
+  url: https://eu.certgov.app
   authSecretRef:
     name: certforge-eu-credentials
 ```
@@ -230,7 +305,7 @@ kind: CertForgeClusterIssuer
 metadata:
   name: certforge-internal
 spec:
-  url: https://app.certgovernance.app
+  url: https://app.certgov.app
   authSecretRef:
     name: certforge-credentials
   issuanceProfileID: "your-internal-ca-profile-id"
@@ -271,7 +346,7 @@ kind: CertForgeClusterIssuer
 metadata:
   name: certforge
 spec:
-  url: https://app.certgovernance.app
+  url: https://app.certgov.app
   authSecretRef:
     name: certforge-credentials
   secretNamespace: my-secrets-namespace
@@ -305,7 +380,7 @@ Go to **Settings → Workload Identity → Add Provider**:
 |-------|-------|
 | Name | `certforge-issuer (production)` |
 | OIDC Issuer URL | The URL from step 1 |
-| Audience | `https://app.certgovernance.app` (or your EU URL) |
+| Audience | `https://app.certgov.app` (or your EU URL) |
 | Allowed Subjects | `system:serviceaccount:certforge-system:certforge-issuer` |
 | Scopes | `read`, `enroll` |
 
@@ -317,10 +392,10 @@ Use an exact subject for production; trailing `*` wildcards (e.g. `system:servic
 helm upgrade --install certforge-issuer oci://ghcr.io/certforge-llc/charts/certforge-issuer \
   --namespace certforge-system \
   --create-namespace \
-  --set certforge.url=https://app.certgovernance.app \
+  --set certforge.url=https://app.certgov.app \
   --set tokenSecret.create=false \
   --set workloadIdentity.enabled=true \
-  --set workloadIdentity.audience=https://app.certgovernance.app
+  --set workloadIdentity.audience=https://app.certgov.app
 ```
 
 **4 — Create the issuer with `workloadIdentity` instead of `authSecretRef`:**
@@ -331,9 +406,9 @@ kind: CertForgeClusterIssuer
 metadata:
   name: certforge
 spec:
-  url: https://app.certgovernance.app
+  url: https://app.certgov.app
   workloadIdentity:
-    audience: https://app.certgovernance.app
+    audience: https://app.certgov.app
     # tokenFile: /var/run/secrets/certforge/token  # optional — this is the default
 ```
 
@@ -458,7 +533,7 @@ Go to **CertForge → Settings → API Keys**, revoke the existing token, and cr
 
 The controller pod cannot reach the CertForge API. Common causes:
 
-1. **Network policy blocking egress** — the controller needs outbound HTTPS (port 443) to `app.certgovernance.app` (US) or `eu.certgovernance.app` (EU).
+1. **Network policy blocking egress** — the controller needs outbound HTTPS (port 443) to `app.certgov.app` (US) or `eu.certgov.app` (EU).
 2. **Wrong URL in spec** — verify `spec.url` matches the region your token was issued for.
 3. **DNS resolution failure** — check that cluster DNS can resolve the hostname.
 
@@ -471,7 +546,7 @@ kubectl logs -n certforge-system deploy/certforge-issuer-controller-manager
 
 # Test egress from inside the cluster (if you have a debug pod)
 kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
-  curl -sI https://app.certgovernance.app/api/v1/ping \
+  curl -sI https://app.certgov.app/api/v1/ping \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -570,19 +645,23 @@ Common causes:
 
 ### CertForgeIssuerSpec (shared by `CertForgeIssuer` and `CertForgeClusterIssuer`)
 
-Exactly one of `authSecretRef` or `workloadIdentity` must be set. Specifying both or neither
-results in the issuer being set to `Ready=False` with reason `InvalidSpec`.
+Exactly one of `authSecretRef`, `workloadIdentity`, or `mtlsSecretRef` must be set. Specifying
+more than one or none results in the issuer being set to `Ready=False` with reason `InvalidSpec`.
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `url` | Yes | Base URL of the CertForge server. Determines the data region. |
-| `authSecretRef.name` | No* | Name of the Secret containing a `token` key with the API bearer token. Mutually exclusive with `workloadIdentity`. |
-| `workloadIdentity.audience` | No* | Audience for the projected ServiceAccount token. Must match the Workload Identity Provider configured in CertForge. Mutually exclusive with `authSecretRef`. |
+| `authSecretRef.name` | No* | Name of the Secret containing a `token` key with the API bearer token. Mutually exclusive with `workloadIdentity` and `mtlsSecretRef`. |
+| `workloadIdentity.audience` | No* | Audience for the projected ServiceAccount token. Must match the Workload Identity Provider configured in CertForge. Mutually exclusive with `authSecretRef` and `mtlsSecretRef`. |
 | `workloadIdentity.tokenFile` | No | Path to the token file inside the pod. Defaults to `/var/run/secrets/certforge/token`. |
+| `mtlsSecretRef.name` | No* | Name of the Secret containing `client.crt`, `client.key`, and `server.crt` written by `certforge-issuer-enroll`. Requires v0.3.x+. Mutually exclusive with `authSecretRef` and `workloadIdentity`. |
+| `mtlsHost` | No** | Hostname of the CertForge agent endpoint (e.g. `usagent.certgov.app`). Required when `mtlsSecretRef` is set. |
+| `mtlsPort` | No** | Port of the CertForge agent endpoint. Default `8443` (prod); `8444` for preview/dev. |
 | `issuanceProfileID` | No | Default issuance profile ID for all certs from this issuer. Overrides the DTP default. Can be overridden per Certificate via the `certforge.io/issuance-profile` annotation. |
 | `secretNamespace` | No | Namespace to read the credentials Secret from (`CertForgeClusterIssuer` only). Defaults to `certforge-system`. |
 
-\* One of `authSecretRef` or `workloadIdentity` is required.
+\* Exactly one of `authSecretRef`, `workloadIdentity`, or `mtlsSecretRef` is required.  
+\*\* Required when `mtlsSecretRef` is set.
 
 ### Annotations
 
@@ -599,7 +678,7 @@ docker build -t certforge-issuer:dev .
 
 ## Get Started Free
 
-[Create a free CertForge account](https://app.certgovernance.app/signup?source=helm-issuer) — 100 certificates,
+[Create a free CertForge account](https://app.certgov.app/signup?source=helm-issuer) — 100 certificates,
 25 domains, full approval workflows, audit log and export. No credit card required.
 
 ## License
